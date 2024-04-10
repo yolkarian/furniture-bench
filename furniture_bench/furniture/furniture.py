@@ -114,7 +114,7 @@ class Furniture(ABC):
                 logger.error("Failed to randomize init pose")
                 return False
             if not self._check_collision(from_skill) and self._in_boundary(from_skill):
-                logger.info("Found initialization pose")
+                # logger.info("Found initialization pose")
                 return True
 
     def _check_collision(self):
