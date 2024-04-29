@@ -30,10 +30,10 @@ def diffik_factory(real_robot=True, *args, **kwargs):
             self.ee_pos_error = None
             self.ee_rot_error = None
 
-            self.pos_scalar = 4.0 / 2.0
-            self.rot_scalar = 9.0 / 4.0
+            self.pos_scalar = 1  # 4.0 / 2.0
+            self.rot_scalar = 1  # 9.0 / 4.0
 
-            self.scale_errors = True
+            self.scale_errors = False
 
         def forward(
             self, state_dict: Dict[str, torch.Tensor]
