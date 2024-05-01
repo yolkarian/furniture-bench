@@ -2,9 +2,11 @@
 
 Utility functions for controlling the robot.
 """
+
 import math
 
 import torch
+import pytorch3d.transforms as pt
 
 
 @torch.jit.script
@@ -110,7 +112,10 @@ def orientation_error(desired, current):
 
 @torch.jit.script
 def quat_conjugate(a):
-    """Compute the conjugate of a quaternion"""
+    """
+    Compute the conjugate of a quaternion
+    Quaternions are represented as (x, y, z, w)
+    """
     shape = a.shape
     a = a.reshape(-1, 4)
     return torch.cat((-a[:, :3], a[:, -1:]), dim=-1).view(shape)
@@ -118,6 +123,10 @@ def quat_conjugate(a):
 
 @torch.jit.script
 def quat_mul(a, b):
+    """
+    Multiply two quaternions
+    Quaternions are represented as (x, y, z, w)
+    """
     assert a.shape == b.shape
     shape = a.shape
     a = a.reshape(-1, 4)
@@ -138,6 +147,36 @@ def quat_mul(a, b):
     quat = torch.stack([x, y, z, w], dim=-1).view(shape)
 
     return quat
+
+
+@torch.jit.script
+def quat_xyzw_to_wxyz(quat_xyzw):
+    """
+    Convert quaternions from (x, y, z, w) order to (w, x, y, z) order.
+
+    Args:
+        quat_xyzw (torch.Tensor): Quaternions in (x, y, z, w) order, shape (..., 4).
+
+    Returns:
+        torch.Tensor: Quaternions in (w, x, y, z) order, shape (..., 4).
+    """
+    inds = torch.tensor([3, 0, 1, 2], dtype=torch.long, device=quat_xyzw.device)
+    return torch.index_select(quat_xyzw, dim=-1, index=inds)
+
+
+@torch.jit.script
+def quat_wxyz_to_xyzw(quat_wxyz):
+    """
+    Convert quaternions from (w, x, y, z) order to (x, y, z, w) order.
+
+    Args:
+        quat_wxyz (torch.Tensor): Quaternions in (w, x, y, z) order, shape (..., 4).
+
+    Returns:
+        torch.Tensor: Quaternions in (x, y, z, w) order, shape (..., 4).
+    """
+    inds = torch.tensor([1, 2, 3, 0], dtype=torch.long, device=quat_wxyz.device)
+    return torch.index_select(quat_wxyz, dim=-1, index=inds)
 
 
 @torch.jit.script
@@ -199,6 +238,45 @@ def quat2mat(quaternion: torch.Tensor) -> torch.Tensor:
             ],
         ]
     )
+
+
+# @torch.jit.script
+def quat2mat_batched(quaternion: torch.Tensor) -> torch.Tensor:
+    """Converts given quaternions (x, y, z, w) to rotation matrices.
+
+    Args:
+        quaternion: (..., 4) tensor of quaternions
+    Returns:
+        (..., 3, 3) tensor of rotation matrices
+    """
+    EPS = 1e-8
+    inds = torch.tensor([3, 0, 1, 2], device=quaternion.device)
+    q = quaternion.index_select(-1, inds)
+
+    n = torch.sum(q * q, dim=-1, keepdim=True)
+    q *= torch.rsqrt(torch.max(n, torch.tensor(EPS, device=q.device)))
+
+    q1, q2, q3, q0 = torch.unbind(q, dim=-1)
+    r11 = 1 - 2 * (q2 * q2 + q3 * q3)
+    r12 = 2 * (q1 * q2 - q3 * q0)
+    r13 = 2 * (q1 * q3 + q2 * q0)
+    r21 = 2 * (q1 * q2 + q3 * q0)
+    r22 = 1 - 2 * (q1 * q1 + q3 * q3)
+    r23 = 2 * (q2 * q3 - q1 * q0)
+    r31 = 2 * (q1 * q3 - q2 * q0)
+    r32 = 2 * (q2 * q3 + q1 * q0)
+    r33 = 1 - 2 * (q1 * q1 + q2 * q2)
+
+    rot_matrix = torch.stack(
+        [
+            torch.stack([r11, r12, r13], dim=-1),
+            torch.stack([r21, r22, r23], dim=-1),
+            torch.stack([r31, r32, r33], dim=-1),
+        ],
+        dim=-2,
+    )
+
+    return rot_matrix
 
 
 @torch.jit.script
@@ -324,6 +402,24 @@ def mat2quat(rmat: torch.Tensor):
 
 
 @torch.jit.script
+def mat2pose_batched(hmat: torch.Tensor):
+    """
+    Converts homogeneous 4x4 matrices into poses.
+
+    Args:
+        hmat: (..., 4, 4) homogeneous matrices
+
+    Returns:
+        tuple (pos, orn) where pos is (..., 3) Cartesian positions
+            and orn is (..., 4) quaternions
+    """
+    pos = hmat[..., :3, 3]
+    quat_wxyz = pt.matrix_to_quaternion(hmat[..., :3, :3])
+    quat_xyzw = quat_wxyz_to_xyzw(quat_wxyz)
+    return pos, quat_xyzw
+
+
+@torch.jit.script
 def mat2pose(hmat: torch.Tensor):
     """
     Converts a homogeneous 4x4 matrix into pose.
@@ -374,6 +470,32 @@ def pose2mat(
     return homo_pose_mat
 
 
+# @torch.jit.script
+def pose2mat_batched(
+    pos: torch.Tensor, quat_xyzw: torch.Tensor, device: torch.device
+) -> torch.Tensor:
+    """
+    Converts poses to homogeneous matrices.
+
+    Args:
+        pos: (..., 3) tensor of Cartesian positions
+        quat: (..., 4) tensor of quaternions
+
+    Returns:
+        (..., 4, 4) tensor of homogeneous matrices
+    """
+    leading_dims = pos.shape[:-1]
+    homo_pose_mat = torch.zeros((*leading_dims, 4, 4)).to(device)
+
+    # Convert quat from IsaacGym to Pytorch3d convention
+    quat_wxyz = quat_xyzw_to_wxyz(quat_xyzw)
+
+    homo_pose_mat[..., :3, :3] = pt.quaternion_to_matrix(quat_wxyz)
+    homo_pose_mat[..., :3, 3] = pos
+    homo_pose_mat[..., 3, 3] = 1.0
+    return homo_pose_mat
+
+
 @torch.jit.script
 def to_homogeneous(pos: torch.Tensor, rot: torch.Tensor) -> torch.Tensor:
     """Givien position and rotation matrix, convert it into homogeneous matrix."""
@@ -420,6 +542,8 @@ def rel_mat(s, t):
     s_inv = torch.linalg.inv(s)
     return t @ s_inv
 
+
 def rot_mat_tensor(x, y, z, device):
     from furniture_bench.utils.pose import get_mat, rot_mat
+
     return torch.tensor(rot_mat([x, y, z], hom=True), device=device).float()
