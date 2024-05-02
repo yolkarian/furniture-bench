@@ -30,6 +30,8 @@ ROBOT_STATE_DIMS = {
 def filter_and_concat_robot_state(robot_state):
     current_robot_state = []
     for rs in ROBOT_STATES:
+        if rs not in robot_state:
+            continue
         if rs == "gripper_width" and robot_state[rs].shape == ():
             robot_state[rs] = np.array([robot_state[rs]])
         current_robot_state.append(robot_state[rs])
