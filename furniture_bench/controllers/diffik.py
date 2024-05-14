@@ -30,8 +30,8 @@ def diffik_factory(real_robot=True, *args, **kwargs):
             self.ee_pos_error = None
             self.ee_rot_error = None
 
-            self.pos_scalar = 1
-            self.rot_scalar = 1
+            self.pos_scalar = 1.0
+            self.rot_scalar = 1.0
 
             self.scale_errors = False
 
@@ -94,7 +94,7 @@ def diffik_factory(real_robot=True, *args, **kwargs):
                 .to(position_error.device)
             )
 
-            dt = 1.0
+            dt = 0.1  # 1.0
             ee_pos_vel = position_error * self.pos_scalar / dt
             ee_rot_vel = ee_delta_axis_angle * self.rot_scalar / dt
 

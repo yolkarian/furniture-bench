@@ -383,8 +383,15 @@ class FurnitureSimEnv(gym.Env):
                 franka_dof_props["friction"][:7] = sim_config["robot"]["arm_frictions"]
             else:
                 franka_dof_props["driveMode"][:7].fill(gymapi.DOF_MODE_POS)
+                # Kq_new = (
+                #     torch.Tensor([150.0, 120.0, 160.0, 100.0, 110.0, 100.0, 40.0]) * 8
+                # )
+                # Kqd_new = torch.Tensor([20.0, 20.0, 20.0, 20.0, 12.0, 12.0, 8.0]) * 8
+                # franka_dof_props["stiffness"][:7] = Kq_new
+                # franka_dof_props["damping"][:7] = Kqd_new
                 franka_dof_props["stiffness"][:7].fill(1000.0)
                 franka_dof_props["damping"][:7].fill(200.0)
+
             # Grippers
             franka_dof_props["driveMode"][7:].fill(gymapi.DOF_MODE_EFFORT)
             franka_dof_props["stiffness"][7:].fill(0)
@@ -1080,8 +1087,11 @@ class FurnitureSimEnv(gym.Env):
             "ee_pos_vel": ee_pos_vel,
             "ee_ori_vel": ee_ori_vel,
             "gripper_width": gripper_width,
+            "finger_joint_1": self.dof_pos[:, 7:8],
+            "finger_joint_2": self.dof_pos[:, 8:9],
         }
-        return {k: robot_state_dict[k] for k in self.robot_state_keys}
+        # return {k: robot_state_dict[k] for k in self.robot_state_keys}
+        return robot_state_dict
 
     def refresh(self):
         self.isaac_gym.simulate(self.sim)
