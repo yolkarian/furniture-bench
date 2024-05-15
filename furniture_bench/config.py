@@ -8,6 +8,7 @@ import numpy as np
 from furniture_bench.utils.pose import get_mat, rot_mat
 
 ROBOT_HEIGHT = 0.015  # Approximate height of bench clamp: 1.5 cm.
+# ROBOT_HEIGHT = 0.0  # Not using bench clamp.
 
 # Fill in information below or define environment variables.
 SERVER_IP = os.getenv("SERVER_IP", "")

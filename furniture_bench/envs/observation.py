@@ -8,11 +8,11 @@ FULL_OBS = [
     "robot_state/joint_velocities",
     "robot_state/joint_torques",
     "color_image1",
-    "depth_image1",
+    # "depth_image1",
     "color_image2",
-    "depth_image2",
-    "color_image3",
-    "depth_image3",
+    # "depth_image2",
+    # "color_image3",
+    # "depth_image3",
     "parts_poses",
 ]
 
