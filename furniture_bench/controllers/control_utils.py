@@ -8,6 +8,8 @@ import math
 import torch
 import pytorch3d.transforms as pt
 
+from ipdb import set_trace as bp
+
 
 @torch.jit.script
 def opspace_matrices(mass_matrix, J_full):
@@ -470,7 +472,7 @@ def pose2mat(
     return homo_pose_mat
 
 
-# @torch.jit.script
+@torch.jit.script
 def pose2mat_batched(
     pos: torch.Tensor, quat_xyzw: torch.Tensor, device: torch.device
 ) -> torch.Tensor:
@@ -478,21 +480,22 @@ def pose2mat_batched(
     Converts poses to homogeneous matrices.
 
     Args:
-        pos: (..., 3) tensor of Cartesian positions
-        quat: (..., 4) tensor of quaternions
+        pos: (B, n_parts, 3) tensor of Cartesian positions
+        quat: (B, n_parts, 4) tensor of quaternions
 
     Returns:
-        (..., 4, 4) tensor of homogeneous matrices
+        (B, n_parts, 4, 4) tensor of homogeneous matrices
     """
-    leading_dims = pos.shape[:-1]
-    homo_pose_mat = torch.zeros((*leading_dims, 4, 4)).to(device)
+    B = pos.shape[0]
+    n_parts = pos.shape[1]
+    homo_pose_mat = torch.zeros((B, n_parts, 4, 4)).to(device)
 
     # Convert quat from IsaacGym to Pytorch3d convention
     quat_wxyz = quat_xyzw_to_wxyz(quat_xyzw)
 
-    homo_pose_mat[..., :3, :3] = pt.quaternion_to_matrix(quat_wxyz)
-    homo_pose_mat[..., :3, 3] = pos
-    homo_pose_mat[..., 3, 3] = 1.0
+    homo_pose_mat[:, :, :3, :3] = pt.quaternion_to_matrix(quat_wxyz)
+    homo_pose_mat[:, :, :3, 3] = pos
+    homo_pose_mat[:, :, 3, 3] = 1.0
     return homo_pose_mat
 
 
