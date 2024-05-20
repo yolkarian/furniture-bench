@@ -501,7 +501,7 @@ def pose2mat_batched(
 
 @torch.jit.script
 def to_homogeneous(pos: torch.Tensor, rot: torch.Tensor) -> torch.Tensor:
-    """Givien position and rotation matrix, convert it into homogeneous matrix."""
+    """Given position and rotation matrix, convert it into homogeneous matrix."""
     transform = torch.zeros((4, 4), device=pos.device)
     if pos.ndim == 2:
         transform[:3, 3:] = pos
