@@ -21,12 +21,11 @@ class KeyboardInterface(DeviceInterface):
 
     ADJUST_DELTA = ["[", "]"]
 
-    # INIT_POS_DELTA = 0.02
-    INIT_POS_DELTA = 0.01
-    INIT_ROT_DELTA = 0.45  # Radian.
+    INIT_POS_DELTA = 0.02
+    INIT_ROT_DELTA = 0.2  # Radian.
 
     MAX_POS_DELTA = 0.1
-    MAX_ROT_DELTA = 0.45  # Radian.
+    MAX_ROT_DELTA = 0.2  # Radian.
 
     intr_z_limit = (-15, 17)
 

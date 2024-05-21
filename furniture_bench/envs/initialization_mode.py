@@ -1,4 +1,5 @@
 """Define task initialization modes for FurnitureBench."""
+
 from enum import Enum
 
 
@@ -10,6 +11,10 @@ class Randomness(Enum):
     HIGH_COLLECT = 4
     SKILL_FIXED = 5
     SKILL_RANDOM = 6
+
+    @staticmethod
+    def str_to_enum(v):
+        return str_to_enum(v)
 
 
 def str_to_enum(v):

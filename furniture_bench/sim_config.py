@@ -28,17 +28,23 @@ sim_params = gymapi.SimParams()
 sim_params.up_axis = gymapi.UP_AXIS_Z
 sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.8)
 sim_params.dt = 1.0 / 60.0
+
+# Increasing this can make the simulation more stable.
 sim_params.substeps = 2
 sim_params.use_gpu_pipeline = True
 sim_params.physx.solver_type = 1
 sim_params.physx.bounce_threshold_velocity = 0.02
+
+# Increasing this can make the simulation more stable.
 sim_params.physx.num_position_iterations = 20
 sim_params.physx.num_velocity_iterations = 1
 sim_params.physx.rest_offset = 0.0
 sim_params.physx.contact_offset = 0.002
 sim_params.physx.friction_offset_threshold = 0.01
 sim_params.physx.friction_correlation_distance = 0.0005
+sim_params.physx.max_depenetration_velocity = 10
 sim_params.physx.use_gpu = True
+
 
 sim_config["sim_params"] = sim_params
 sim_config["parts"] = {"friction": 0.15}
