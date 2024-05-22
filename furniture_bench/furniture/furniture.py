@@ -19,6 +19,8 @@ from furniture_bench.furniture.parts.obstacle_front import ObstacleFront
 from furniture_bench.furniture.parts.obstacle_right import ObstacleRight
 from furniture_bench.furniture.parts.obstacle_left import ObstacleLeft
 
+from ipdb import set_trace as bp
+
 
 class Furniture(ABC):
     def __init__(self):
@@ -448,6 +450,8 @@ class Furniture(ABC):
         pose1_mat = T.pose2mat(pose1)
         pose2_mat = T.pose2mat(pose2)
         rel_pose = np.linalg.inv(pose1_mat) @ pose2_mat
+
+        bp()
 
         assembled_rel_poses = self.assembled_rel_poses[(part_idx1, part_idx2)]
         if assembled_rel_poses is None:
