@@ -451,8 +451,6 @@ class Furniture(ABC):
         pose2_mat = T.pose2mat(pose2)
         rel_pose = np.linalg.inv(pose1_mat) @ pose2_mat
 
-        bp()
-
         assembled_rel_poses = self.assembled_rel_poses[(part_idx1, part_idx2)]
         if assembled_rel_poses is None:
             raise Exception("No relative pose!")
