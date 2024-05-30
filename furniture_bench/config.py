@@ -738,7 +738,8 @@ config: Dict[str, Any] = {
                 "name": "round_table_top",
                 "asset_file": "furniture/urdf/round_table/round_table_top.urdf",
                 "ids": [24, 25, 26, 27, 28, 29, 30, 31],
-                "reset_pos": [[0, 0.24, -0.001]] * 2 + [[0.07, 0.26, -0.001]] * 3,
+                # "reset_pos": [[0, 0.24, -0.001]] * 2 + [[0.07, 0.26, -0.001]] * 3,
+                "reset_pos": [[0, 0.205, -0.001]] * 2 + [[0.07, 0.26, -0.001]] * 3,
                 "reset_ori": [rot_mat(np.array([0, np.pi, 0]), hom=True)] * 5,
                 "part_moved_skill_idx": 2,
                 "high_rand_reset_pos": [
@@ -1492,7 +1493,7 @@ config: Dict[str, Any] = {
                 #     [0.07, 0.37],
                 # ],  # Furniture parts position limits.
                 # "reset_pos": [[0.18, 0.13, -0.016]] * 4 + [[0.12, 0.31, -0.09]],
-                "reset_pos": [[-0.05, 0.27, -0.016]] * 4 + [[0.12, 0.31, -0.09]],
+                "reset_pos": [[-0.05, 0.235, -0.016]] * 4 + [[0.12, 0.31, -0.09]],
                 "reset_ori": [rot_mat(np.array([-np.arctan2(7.6, 52), 0, 0]), hom=True)]
                 * 4
                 + [rot_mat([-np.pi / 2, 0, 0], hom=True)],
