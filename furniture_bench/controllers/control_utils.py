@@ -6,8 +6,7 @@ Utility functions for controlling the robot.
 import math
 
 import torch
-import pytorch3d.transforms as pt
-
+from torch.nn import functional as F
 from ipdb import set_trace as bp
 
 
@@ -42,6 +41,219 @@ def sign(x: float, epsilon: float = 0.01):
     elif x < -epsilon:
         return -1.0
     return 0.0
+
+
+def quaternion_multiply(a, b):
+    """
+    Multiply two quaternions representing rotations, returning the quaternion
+    representing their composition, i.e. the versor with nonnegative real part.
+    Usual torch rules for broadcasting apply.
+
+    Args:
+        a: Quaternions as tensor of shape (..., 4), real part last.
+        b: Quaternions as tensor of shape (..., 4), real part last.
+
+    Returns:
+        The product of a and b, a tensor of quaternions of shape (..., 4).
+    """
+    ab = quaternion_raw_multiply(a, b)
+    return standardize_quaternion(ab)
+
+
+def quaternion_raw_multiply(a, b):
+    """
+    Multiply two quaternions.
+    Usual torch rules for broadcasting apply.
+
+    Args:
+        a: Quaternions as tensor of shape (..., 4), real part last.
+        b: Quaternions as tensor of shape (..., 4), real part last.
+
+    Returns:
+        The product of a and b, a tensor of quaternions shape (..., 4), real part last.
+    """
+    ax, ay, az, aw = torch.unbind(a, -1)
+    bx, by, bz, bw = torch.unbind(b, -1)
+    ox = aw * bx + ax * bw + ay * bz - az * by
+    oy = aw * by - ax * bz + ay * bw + az * bx
+    oz = aw * bz + ax * by - ay * bx + az * bw
+    ow = aw * bw - ax * bx - ay * by - az * bz
+    return torch.stack((ox, oy, oz, ow), -1)
+
+
+def proprioceptive_quat_to_6d_rotation(robot_state: torch.tensor) -> torch.tensor:
+    """
+    Convert the 14D proprioceptive state space to 16D state space.
+
+    Parts:
+        - 3D position
+        - 4D quaternion rotation
+        - 3D linear velocity
+        - 3D angular velocity
+        - 1D gripper width
+
+    Rotation 4D quaternion -> 6D vector represention
+
+    Accepts any number of leading dimensions.
+    """
+    # assert robot_state.shape[-1] == 14, "Robot state must be 14D"
+
+    # Get each part of the robot state
+    pos = robot_state[..., :3]  # (x, y, z)
+    ori_quat = robot_state[..., 3:7]  # (x, y, z, w)
+    pos_vel = robot_state[..., 7:10]  # (x, y, z)
+    ori_vel = robot_state[..., 10:13]  # (x, y, z)
+    gripper = robot_state[..., 13:]  # (width)
+
+    # Convert quaternion to 6D rotation
+    ori_6d = isaac_quat_to_rot_6d(ori_quat)
+
+    # Concatenate all parts
+    robot_state_6d = torch.cat([pos, ori_6d, pos_vel, ori_vel, gripper], dim=-1)
+
+    return robot_state_6d
+
+
+def isaac_quat_to_rot_6d(quat_xyzw: torch.Tensor) -> torch.Tensor:
+    """Converts IsaacGym quaternion to rotation 6D."""
+    # Move the real part from the back to the front
+    # quat_wxyz = isaac_quat_to_pytorch3d_quat(quat_xyzw)
+
+    # Convert each quaternion to a rotation matrix
+    rot_mats = quaternion_to_matrix(quat_xyzw)
+
+    # Extract the first two columns of each rotation matrix
+    rot_6d = matrix_to_rotation_6d(rot_mats)
+
+    return rot_6d
+
+
+def matrix_to_rotation_6d(matrix: torch.Tensor) -> torch.Tensor:
+    """
+    Converts rotation matrices to 6D rotation representation by Zhou et al. [1]
+    by dropping the last row. Note that 6D representation is not unique.
+    Args:
+        matrix: batch of rotation matrices of size (*, 3, 3)
+
+    Returns:
+        6D rotation representation, of size (*, 6)
+
+    [1] Zhou, Y., Barnes, C., Lu, J., Yang, J., & Li, H.
+    On the Continuity of Rotation Representations in Neural Networks.
+    IEEE Conference on Computer Vision and Pattern Recognition, 2019.
+    Retrieved from http://arxiv.org/abs/1812.07035
+    """
+    return matrix[..., :2, :].clone().reshape(*matrix.size()[:-2], 6)
+
+
+def standardize_quaternion(quaternions):
+    """
+    Convert a unit quaternion to a standard form: one in which the real
+    part is non negative.
+
+    Args:
+        quaternions: Quaternions with real part last,
+            as tensor of shape (..., 4).
+
+    Returns:
+        Standardized quaternions as tensor of shape (..., 4).
+    """
+    return torch.where(quaternions[..., -1:] < 0, -quaternions, quaternions)
+
+
+def axis_angle_to_matrix(axis_angle):
+    """
+    Convert rotations given as axis/angle to rotation matrices.
+
+    Args:
+        axis_angle: Rotations given as a vector in axis angle form,
+            as a tensor of shape (..., 3), where the magnitude is
+            the angle turned anticlockwise in radians around the
+            vector's direction.
+
+    Returns:
+        Rotation matrices as tensor of shape (..., 3, 3).
+    """
+    return quaternion_to_matrix(axis_angle_to_quaternion(axis_angle))
+
+
+def axis_angle_to_quaternion(axis_angle):
+    """
+    Convert rotations given as axis/angle to quaternions.
+
+    Args:
+        axis_angle: Rotations given as a vector in axis angle form,
+            as a tensor of shape (..., 3), where the magnitude is
+            the angle turned anticlockwise in radians around the
+            vector's direction.
+
+    Returns:
+        quaternions with real part last, as tensor of shape (..., 4).
+    """
+    angles = torch.norm(axis_angle, p=2, dim=-1, keepdim=True)
+    half_angles = 0.5 * angles
+    eps = 1e-6
+    small_angles = angles.abs() < eps
+    sin_half_angles_over_angles = torch.empty_like(angles)
+    sin_half_angles_over_angles[~small_angles] = (
+        torch.sin(half_angles[~small_angles]) / angles[~small_angles]
+    )
+    # for x small, sin(x/2) is about x/2 - (x/2)^3/6
+    # so sin(x/2)/x is about 1/2 - (x*x)/48
+    sin_half_angles_over_angles[small_angles] = (
+        0.5 - (angles[small_angles] * angles[small_angles]) / 48
+    )
+    quaternions = torch.cat(
+        [axis_angle * sin_half_angles_over_angles, torch.cos(half_angles)], dim=-1
+    )
+    return quaternions
+
+
+def matrix_to_axis_angle(matrix):
+    """
+    Convert rotations given as rotation matrices to axis/angle.
+
+    Args:
+        matrix: Rotation matrices as tensor of shape (..., 3, 3).
+
+    Returns:
+        Rotations given as a vector in axis angle form, as a tensor
+            of shape (..., 3), where the magnitude is the angle
+            turned anticlockwise in radians around the vector's
+            direction.
+    """
+    return quaternion_to_axis_angle(matrix_to_quaternion(matrix))
+
+
+def quaternion_to_axis_angle(quaternions):
+    """
+    Convert rotations given as quaternions to axis/angle.
+
+    Args:
+        quaternions: quaternions with real part last,
+            as tensor of shape (..., 4).
+
+    Returns:
+        Rotations given as a vector in axis angle form, as a tensor
+            of shape (..., 3), where the magnitude is the angle
+            turned anticlockwise in radians around the vector's
+            direction.
+    """
+    norms = torch.norm(quaternions[..., :-1], p=2, dim=-1, keepdim=True)
+    half_angles = torch.atan2(norms, quaternions[..., -1:])
+    angles = 2 * half_angles
+    eps = 1e-6
+    small_angles = angles.abs() < eps
+    sin_half_angles_over_angles = torch.empty_like(angles)
+    sin_half_angles_over_angles[~small_angles] = (
+        torch.sin(half_angles[~small_angles]) / angles[~small_angles]
+    )
+    # for x small, sin(x/2) is about x/2 - (x/2)^3/6
+    # so sin(x/2)/x is about 1/2 - (x*x)/48
+    sin_half_angles_over_angles[small_angles] = (
+        0.5 - (angles[small_angles] * angles[small_angles]) / 48
+    )
+    return quaternions[..., :-1] / sin_half_angles_over_angles
 
 
 @torch.jit.script
@@ -403,6 +615,86 @@ def mat2quat(rmat: torch.Tensor):
     return q1[inds]
 
 
+def matrix_to_quaternion(matrix):
+    """
+    Convert rotations given as rotation matrices to quaternions.
+
+    Args:
+        matrix: Rotation matrices as tensor of shape (..., 3, 3).
+
+    Returns:
+        quaternions with real part last, as tensor of shape (..., 4).
+    """
+    if matrix.size(-1) != 3 or matrix.size(-2) != 3:
+        raise ValueError(f"Invalid rotation matrix  shape f{matrix.shape}.")
+
+    m00 = matrix[..., 0, 0]
+    m11 = matrix[..., 1, 1]
+    m22 = matrix[..., 2, 2]
+    o0 = 0.5 * _sqrt_positive_part(1 + m00 + m11 + m22)
+    x = 0.5 * _sqrt_positive_part(1 + m00 - m11 - m22)
+    y = 0.5 * _sqrt_positive_part(1 - m00 + m11 - m22)
+    z = 0.5 * _sqrt_positive_part(1 - m00 - m11 + m22)
+    o1 = _copysign(x, matrix[..., 2, 1] - matrix[..., 1, 2])
+    o2 = _copysign(y, matrix[..., 0, 2] - matrix[..., 2, 0])
+    o3 = _copysign(z, matrix[..., 1, 0] - matrix[..., 0, 1])
+
+    return torch.stack((o1, o2, o3, o0), -1)
+
+
+def rotation_6d_to_matrix(d6: torch.Tensor) -> torch.Tensor:
+    """
+    Converts 6D rotation representation by Zhou et al. [1] to rotation matrix
+    using Gram--Schmidt orthogonalisation per Section B of [1].
+    Args:
+        d6: 6D rotation representation, of size (*, 6)
+
+    Returns:
+        batch of rotation matrices of size (*, 3, 3)
+
+    [1] Zhou, Y., Barnes, C., Lu, J., Yang, J., & Li, H.
+    On the Continuity of Rotation Representations in Neural Networks.
+    IEEE Conference on Computer Vision and Pattern Recognition, 2019.
+    Retrieved from http://arxiv.org/abs/1812.07035
+    """
+
+    a1, a2 = d6[..., :3], d6[..., 3:]
+    b1 = F.normalize(a1, dim=-1)
+    b2 = a2 - (b1 * a2).sum(-1, keepdim=True) * b1
+    b2 = F.normalize(b2, dim=-1)
+    b3 = torch.cross(b1, b2, dim=-1)
+    return torch.stack((b1, b2, b3), dim=-2)
+
+
+def _copysign(a, b):
+    """
+    Return a tensor where each element has the absolute value taken from the,
+    corresponding element of a, with sign taken from the corresponding
+    element of b. This is like the standard copysign floating-point operation,
+    but is not careful about negative 0 and NaN.
+
+    Args:
+        a: source tensor.
+        b: tensor whose signs will be used, of the same shape as a.
+
+    Returns:
+        Tensor of the same shape as a with the signs of b.
+    """
+    signs_differ = (a < 0) != (b < 0)
+    return torch.where(signs_differ, -a, a)
+
+
+def _sqrt_positive_part(x):
+    """
+    Returns torch.sqrt(torch.max(0, x))
+    but with a zero subgradient where x is 0.
+    """
+    ret = torch.zeros_like(x)
+    positive_mask = x > 0
+    ret[positive_mask] = torch.sqrt(x[positive_mask])
+    return ret
+
+
 @torch.jit.script
 def mat2pose_batched(hmat: torch.Tensor):
     """
@@ -416,8 +708,7 @@ def mat2pose_batched(hmat: torch.Tensor):
             and orn is (..., 4) quaternions
     """
     pos = hmat[..., :3, 3]
-    quat_wxyz = pt.matrix_to_quaternion(hmat[..., :3, :3])
-    quat_xyzw = quat_wxyz_to_xyzw(quat_wxyz)
+    quat_xyzw = matrix_to_quaternion(hmat[..., :3, :3])
     return pos, quat_xyzw
 
 
@@ -472,6 +763,37 @@ def pose2mat(
     return homo_pose_mat
 
 
+def quaternion_to_matrix(quaternions):
+    """
+    Convert rotations given as quaternions to rotation matrices.
+
+    Args:
+        quaternions: quaternions with real part last,
+            as tensor of shape (..., 4).
+
+    Returns:
+        Rotation matrices as tensor of shape (..., 3, 3).
+    """
+    i, j, k, r = torch.unbind(quaternions, -1)
+    two_s = 2.0 / (quaternions * quaternions).sum(-1)
+
+    o = torch.stack(
+        (
+            1 - two_s * (j * j + k * k),
+            two_s * (i * j - k * r),
+            two_s * (i * k + j * r),
+            two_s * (i * j + k * r),
+            1 - two_s * (i * i + k * k),
+            two_s * (j * k - i * r),
+            two_s * (i * k - j * r),
+            two_s * (j * k + i * r),
+            1 - two_s * (i * i + j * j),
+        ),
+        -1,
+    )
+    return o.reshape(quaternions.shape[:-1] + (3, 3))
+
+
 @torch.jit.script
 def pose2mat_batched(
     pos: torch.Tensor, quat_xyzw: torch.Tensor, device: torch.device
@@ -490,10 +812,7 @@ def pose2mat_batched(
     n_parts = pos.shape[1]
     homo_pose_mat = torch.zeros((B, n_parts, 4, 4)).to(device)
 
-    # Convert quat from IsaacGym to Pytorch3d convention
-    quat_wxyz = quat_xyzw_to_wxyz(quat_xyzw)
-
-    homo_pose_mat[:, :, :3, :3] = pt.quaternion_to_matrix(quat_wxyz)
+    homo_pose_mat[:, :, :3, :3] = quaternion_to_matrix(quat_xyzw)
     homo_pose_mat[:, :, :3, 3] = pos
     homo_pose_mat[:, :, 3, 3] = 1.0
     return homo_pose_mat
@@ -550,3 +869,77 @@ def rot_mat_tensor(x, y, z, device):
     from furniture_bench.utils.pose import get_mat, rot_mat
 
     return torch.tensor(rot_mat([x, y, z], hom=True), device=device).float()
+
+
+@torch.jit.script
+def pose_from_vector(vec):
+    """
+    Vec is (num_envs, 7) tensor where the first 3 elements are the position
+    and the last 4 elements are the quaternion x, y, z, w.
+    """
+    num_envs = vec.shape[0]
+    # Extract position and quaternion from the vector
+    pos = vec[:, :3]
+    quat = vec[:, 3:]
+
+    # Normalize the quaternion
+    quat = quat / torch.norm(quat, dim=-1, keepdim=True)
+
+    # Convert quaternion to rotation matrix
+    x, y, z, w = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    xx = x * x
+    xy = x * y
+    xz = x * z
+    xw = x * w
+    yy = y * y
+    yz = y * z
+    yw = y * w
+    zz = z * z
+    zw = z * w
+
+    rot_matrix = torch.stack(
+        [
+            1 - 2 * (yy + zz),
+            2 * (xy - zw),
+            2 * (xz + yw),
+            2 * (xy + zw),
+            1 - 2 * (xx + zz),
+            2 * (yz - xw),
+            2 * (xz - yw),
+            2 * (yz + xw),
+            1 - 2 * (xx + yy),
+        ],
+        dim=-1,
+    ).view(num_envs, 3, 3)
+
+    # Combine position and rotation matrix to form the pose matrix
+    pose_matrix = torch.eye(4, dtype=vec.dtype, device=vec.device).repeat(
+        num_envs, 1, 1
+    )
+    pose_matrix[:, :3, :3] = rot_matrix
+    pose_matrix[:, :3, 3] = pos
+
+    return pose_matrix
+
+
+def cosine_sim(w, v):
+    # Compute the dot product and norms along the last dimension
+    dot_product = torch.sum(w * v, dim=-1)
+    w_norm = torch.norm(w, dim=-1)
+    v_norm = torch.norm(v, dim=-1)
+
+    # Compute the cosine similarity
+    return dot_product / (w_norm * v_norm)
+
+
+@torch.jit.script
+def is_similar_rot(rot1: torch.Tensor, rot2: torch.Tensor, ori_bound: float):
+    cosine_sims = cosine_sim(rot1, rot2)
+    return torch.all(cosine_sims >= ori_bound, dim=-1)
+
+
+@torch.jit.script
+def is_similar_pos(pos1: torch.Tensor, pos2: torch.Tensor, pos_threshold: torch.Tensor):
+    pos_diffs = torch.abs(pos1 - pos2)
+    within_threshold = pos_diffs <= pos_threshold
+    return torch.all(within_threshold, dim=-1)

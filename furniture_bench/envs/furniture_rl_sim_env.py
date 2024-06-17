@@ -22,21 +22,16 @@ from datetime import datetime
 from pathlib import Path
 
 from furniture_bench.furniture.furniture import Furniture
-from src.dataset.normalizer import LinearNormalizer
-from src.gym.utils import VideoRecorder
+from furniture_bench.utils.recorder import VideoRecorder
 import torch
-import cv2
 import gym
 import numpy as np
-
-import pytorch3d.transforms as pt
 
 import furniture_bench.utils.transform as T
 import furniture_bench.controllers.control_utils as C
 from furniture_bench.envs.initialization_mode import Randomness, str_to_enum
-from src.controllers.diffik import diffik_factory
+from furniture_bench.controllers.diffik import diffik_factory
 
-# from furniture_bench.controllers.diffik_qp import diffik_factory
 from furniture_bench.furniture import furniture_factory
 from furniture_bench.sim_config import sim_config
 from furniture_bench.config import ROBOT_HEIGHT, config
@@ -46,7 +41,6 @@ from furniture_bench.envs.observation import (
 )
 from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS
 from furniture_bench.furniture.parts.part import Part
-from src.common.geometry import proprioceptive_quat_to_6d_rotation
 
 from ipdb import set_trace as bp
 
@@ -841,7 +835,7 @@ class FurnitureSimEnv(gym.Env):
         # next, check the distance between the hand poses and the bulb poses
         lb_pos = self.rb_states[self.lamp_bulb_rb_indices, :3].view(self.num_envs, 3)
         hand_pos = self.rb_states[self.ee_idxs, :3].view(self.num_envs, 3)
-        hand_bulb_close = is_similar_pos(
+        hand_bulb_close = C.is_similar_pos(
             lb_pos, hand_pos, pos_threshold=self.hand_bulb_pos_thresh
         )
         to_rest = to_rest & ~hand_bulb_close
@@ -882,10 +876,6 @@ class FurnitureSimEnv(gym.Env):
         )
 
     def simulate_step(self, action):
-        # if isinstance(action, np.ndarray):
-        #     action = torch.from_numpy(action).float().to(device=self.device)
-        # if len(action.shape) == 1:
-        #     action = action.unsqueeze(0)
 
         # Clip the action to be within the action space.
         action = torch.clamp(action, self.act_low, self.act_high)
@@ -905,19 +895,19 @@ class FurnitureSimEnv(gym.Env):
 
         elif self.act_rot_repr == "rot_6d":
             rot_6d = action[:, 3:9]
-            rot_mat = pt.rotation_6d_to_matrix(rot_6d)
+            rot_mat = C.rotation_6d_to_matrix(rot_6d)
             # Real part is the first element in the quaternion.
-            action_quat_wxyz = pt.matrix_to_quaternion(rot_mat)
+            action_quat_wxyz = C.matrix_to_quaternion(rot_mat)
 
         else:
             # Convert axis angle to quaternion.
-            action_quat_wxyz = pt.matrix_to_quaternion(
-                pt.axis_angle_to_matrix(action[:, 3:6])
+            action_quat_wxyz = C.matrix_to_quaternion(
+                C.axis_angle_to_matrix(action[:, 3:6])
             )
 
         if self.action_type == "delta":
             goals_pos = action[:, :3] + ee_pos
-            goals_quat_wxyz = pt.quaternion_multiply(ee_quat_wxyz, action_quat_wxyz)
+            goals_quat_wxyz = C.quaternion_multiply(ee_quat_wxyz, action_quat_wxyz)
         elif self.action_type == "pos":
             goals_pos = action[:, :3]
             goals_quat_wxyz = action_quat_wxyz
@@ -1922,20 +1912,20 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         # Loop over parts to be assembled (relatively small number)
         for i, pair in enumerate(self.pairs_to_assemble):
             # Compute the relative pose for the specific pair of parts that should be assembled
-            pose_mat1 = pose_from_vector(parts_poses[:, pair[0]])
-            pose_mat2 = pose_from_vector(parts_poses[:, pair[1]])
+            pose_mat1 = C.pose_from_vector(parts_poses[:, pair[0]])
+            pose_mat2 = C.pose_from_vector(parts_poses[:, pair[1]])
             rel_pose = torch.matmul(torch.inverse(pose_mat1), pose_mat2)
 
             # Leading dimension is for checking if rel pose matches on of many possible assembled poses
             if pair in self.furniture.position_only:
                 similar_rot = torch.tensor([True] * self.num_envs, device=self.device)
             else:
-                similar_rot = is_similar_rot(
+                similar_rot = C.is_similar_rot(
                     rel_pose[..., :3, :3],
                     self.assembled_rel_poses[i, :, None, :3, :3],
                     self.furniture.ori_bound,
                 )
-            similar_pos = is_similar_pos(
+            similar_pos = C.is_similar_pos(
                 rel_pose[..., :3, 3],
                 self.assembled_rel_poses[i, :, None, :3, 3],
                 torch.tensor(
@@ -2242,189 +2232,3 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         self._apply_forces_to_parts(
             env_idxs, self.max_force_magnitude, self.max_torque_magnitude
         )
-
-
-@torch.jit.script
-def pose_from_vector(vec):
-    """
-    Vec is (num_envs, 7) tensor where the first 3 elements are the position
-    and the last 4 elements are the quaternion x, y, z, w.
-    """
-    num_envs = vec.shape[0]
-    # Extract position and quaternion from the vector
-    pos = vec[:, :3]
-    quat = vec[:, 3:]
-
-    # Normalize the quaternion
-    quat = quat / torch.norm(quat, dim=-1, keepdim=True)
-
-    # Convert quaternion to rotation matrix
-    x, y, z, w = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
-    xx = x * x
-    xy = x * y
-    xz = x * z
-    xw = x * w
-    yy = y * y
-    yz = y * z
-    yw = y * w
-    zz = z * z
-    zw = z * w
-
-    rot_matrix = torch.stack(
-        [
-            1 - 2 * (yy + zz),
-            2 * (xy - zw),
-            2 * (xz + yw),
-            2 * (xy + zw),
-            1 - 2 * (xx + zz),
-            2 * (yz - xw),
-            2 * (xz - yw),
-            2 * (yz + xw),
-            1 - 2 * (xx + yy),
-        ],
-        dim=-1,
-    ).view(num_envs, 3, 3)
-
-    # Combine position and rotation matrix to form the pose matrix
-    pose_matrix = torch.eye(4, dtype=vec.dtype, device=vec.device).repeat(
-        num_envs, 1, 1
-    )
-    pose_matrix[:, :3, :3] = rot_matrix
-    pose_matrix[:, :3, 3] = pos
-
-    return pose_matrix
-
-
-def cosine_sim(w, v):
-    # Compute the dot product and norms along the last dimension
-    dot_product = torch.sum(w * v, dim=-1)
-    w_norm = torch.norm(w, dim=-1)
-    v_norm = torch.norm(v, dim=-1)
-
-    # Compute the cosine similarity
-    return dot_product / (w_norm * v_norm)
-
-
-@torch.jit.script
-def is_similar_rot(rot1: torch.Tensor, rot2: torch.Tensor, ori_bound: float):
-    cosine_sims = cosine_sim(rot1, rot2)
-    return torch.all(cosine_sims >= ori_bound, dim=-1)
-
-
-@torch.jit.script
-def is_similar_pos(pos1: torch.Tensor, pos2: torch.Tensor, pos_threshold: torch.Tensor):
-    pos_diffs = torch.abs(pos1 - pos2)
-    within_threshold = pos_diffs <= pos_threshold
-    return torch.all(within_threshold, dim=-1)
-
-
-class FurnitureRLSimEnvFinetune(FurnitureRLSimEnv):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # Load in the normalizer weights
-        self.normalizer = LinearNormalizer()
-        self.normalizer.load_state_dict(
-            torch.load(
-                "/data/scratch/ankile/diffusion-adapt/data/furniture/one_leg_low_dim_normalizer.pth"
-            )
-        )
-        self.normalizer.to(self.device)
-
-    def reset_arg(self, options_list=None):
-        return self.reset_one_arg(options=options_list)
-
-    def reset_one_arg(self, env_ind=None, options=None):
-        if env_ind is not None:
-            env_ind = torch.tensor([env_ind], device=self.device)
-
-        obs = self.reset(env_idxs=env_ind)
-
-        # Concat together the robot_state and parts_poses
-        robot_state = obs["robot_state"]
-
-        # Convert the robot state to have 6D pose
-        robot_state = proprioceptive_quat_to_6d_rotation(robot_state)
-
-        parts_poses = obs["parts_poses"]
-
-        obs = torch.cat([robot_state, parts_poses], dim=-1)
-        nobs = self.normalizer(obs, "observations", forward=True)
-
-        # Clip any observation bigger than pm 5
-        nobs = torch.clamp(nobs, -5, 5)
-
-        return nobs.cpu().numpy()
-
-    def step(self, action):
-        action = torch.tensor(action, device=self.device)
-
-        # Denormalize the action
-        action = self.normalizer(action, "actions", forward=False)
-
-        obs, reward, done, info = super().step(action)
-
-        # Only mark the environment as done if it times out
-        done = self.env_steps >= self.max_env_steps
-
-        robot_state = obs["robot_state"]
-
-        # Convert the robot state to have 6D pose
-        robot_state = proprioceptive_quat_to_6d_rotation(robot_state)
-
-        parts_poses = obs["parts_poses"]
-
-        obs = torch.cat([robot_state, parts_poses], dim=-1)
-        nobs = self.normalizer(obs, "observations", forward=True)
-
-        nobs = torch.clamp(nobs, -5, 5)
-
-        return (
-            nobs.cpu().numpy(),
-            reward.squeeze().cpu().numpy(),
-            done.squeeze().cpu().numpy(),
-            info,
-        )
-
-
-class FurnitureRLSimEnvPlaceTabletop(FurnitureRLSimEnv):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # Define the goal position for the tabletop
-        self.tabletop_goal = torch.tensor([0.0819, 0.2866, -0.0157], device=self.device)
-
-    def _reward(self):
-        """Calculates the reward for the current state of the environment."""
-        # Get the end effector position
-        parts_poses = self.get_parts_poses(sim_coord=False)
-        tabletop_pos = parts_poses[:, :3]
-
-        reward = torch.zeros(self.num_envs, device=self.device)
-
-        # Set the reward to be 1 if the distance is less than 0.1 (10 cm) from the goal
-        reward[torch.norm(tabletop_pos - self.tabletop_goal, dim=-1) < 0.005] = 1
-
-        return reward
-
-
-class FurnitureRLSimEnvReacher(FurnitureRLSimEnv):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # Define the goal position for the end effector
-        self.goal_pos = torch.tensor([0.5934, -0.2813, 0.5098], device=self.device)
-
-    def _reward(self):
-        """Calculates the reward for the current state of the environment."""
-        # Get the end effector position
-        ee_pos, _ = self.get_ee_pose()
-
-        reward = torch.zeros(self.num_envs, device=self.device)
-
-        # Set the reward to be 1 if the distance is less than 0.1 (10 cm) from the goal
-        reward[torch.norm(ee_pos - self.goal_pos, dim=-1) < 0.1] = 1
-
-        return reward
