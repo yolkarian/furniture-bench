@@ -883,38 +883,29 @@ class FurnitureSimEnv(gym.Env):
         # Set the goal
         ee_pos, ee_quat_xyzw = self.get_ee_pose()
 
-        # Move ee_quat real to the first element.
-        ee_quat_wxyz = C.quat_xyzw_to_wxyz(ee_quat_xyzw)
-
         if self.act_rot_repr == "quat":
             # Real part is the last element in the quaternion.
             action_quat_xyzw = action[:, 3:7]
-
-            # Move the real part to the first element.
-            action_quat_wxyz = C.quat_xyzw_to_wxyz(action_quat_xyzw)
 
         elif self.act_rot_repr == "rot_6d":
             rot_6d = action[:, 3:9]
             rot_mat = C.rotation_6d_to_matrix(rot_6d)
             # Real part is the first element in the quaternion.
-            action_quat_wxyz = C.matrix_to_quaternion(rot_mat)
+            action_quat_xyzw = C.matrix_to_quaternion(rot_mat)
 
         else:
             # Convert axis angle to quaternion.
-            action_quat_wxyz = C.matrix_to_quaternion(
+            action_quat_xyzw = C.matrix_to_quaternion(
                 C.axis_angle_to_matrix(action[:, 3:6])
             )
 
         if self.action_type == "delta":
             goals_pos = action[:, :3] + ee_pos
-            goals_quat_wxyz = C.quaternion_multiply(ee_quat_wxyz, action_quat_wxyz)
+            goals_quat_xyzw = C.quaternion_multiply(ee_quat_xyzw, action_quat_xyzw)
         elif self.action_type == "pos":
             goals_pos = action[:, :3]
-            goals_quat_wxyz = action_quat_wxyz
+            goals_quat_xyzw = action_quat_xyzw
 
-        goals_quat_xyzw = C.quat_wxyz_to_xyzw(goals_quat_wxyz)
-
-        # TODO: See if it makes sense to implement batching for the OSC controller.
         self.step_ctrl.set_goal(goals_pos, goals_quat_xyzw)
 
         pos_action = torch.zeros_like(self.dof_pos)
