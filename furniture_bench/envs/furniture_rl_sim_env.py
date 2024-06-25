@@ -45,7 +45,7 @@ from furniture_bench.furniture.parts.part import Part
 from ipdb import set_trace as bp
 
 
-ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets")
+ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets_no_tags")
 
 
 class FurnitureSimEnv(gym.Env):
@@ -75,6 +75,7 @@ class FurnitureSimEnv(gym.Env):
         action_type: str = "delta",  # "delta" or "pos"
         ctrl_mode: str = "diffik",
         ee_laser: bool = False,
+        april_tags=False,
         **kwargs,
     ):
         """
@@ -102,6 +103,10 @@ class FurnitureSimEnv(gym.Env):
         """
         super(FurnitureSimEnv, self).__init__()
         self.device = torch.device("cuda", compute_device_id)
+
+        if april_tags:
+            global ASSET_ROOT
+            ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets")
 
         assert (
             ctrl_mode == "diffik"
