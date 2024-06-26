@@ -251,3 +251,11 @@ stool_leg1_asset_options.density = 333.66
 sim_config["asset"]["stool_leg1"] = stool_leg1_asset_options
 sim_config["asset"]["stool_leg2"] = stool_leg1_asset_options
 sim_config["asset"]["stool_leg3"] = stool_leg1_asset_options
+
+rack_asset_options = default_asset_options()
+rack_asset_options.density = 100.00
+sim_config["asset"]["rack"] = rack_asset_options
+
+mug_asset_options = default_asset_options()
+mug_asset_options.density = 100.00
+sim_config["asset"]["mug"] = mug_asset_options
