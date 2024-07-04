@@ -304,6 +304,7 @@ class FurnitureSimEnv(gym.Env):
         self.obstacle_front_pose.r = gymapi.Quat.from_axis_angle(
             gymapi.Vec3(0, 0, 1), 0.5 * np.pi
         )
+
         self.obstacle_right_pose = gymapi.Transform()
         self.obstacle_right_pose.p = gymapi.Vec3(
             self.obstacle_front_pose.p.x - 0.075,
