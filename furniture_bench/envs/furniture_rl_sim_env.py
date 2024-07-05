@@ -744,6 +744,9 @@ class FurnitureSimEnv(gym.Env):
 
     def sim_coord_to_robot_coord(self, sim_coord_mat):
         return self.sim_to_robot_mat @ sim_coord_mat
+    
+    def april_coord_to_robot_coord(self, april_coord_mat):
+        return self.april_to_robot_mat @ april_coord_mat
 
     @property
     def april_to_sim_mat(self):
@@ -1115,6 +1118,15 @@ class FurnitureSimEnv(gym.Env):
         )
 
         robot_coord_poses_mat = self.sim_coord_to_robot_coord(part_poses_mat)
+        robot_coord_poses = torch.cat(C.mat2pose_batched(robot_coord_poses_mat), dim=-1)
+        return robot_coord_poses
+    
+    def april_pose_to_robot_pose(self, parts_poses):
+        part_poses_mat = C.pose2mat_batched(
+            parts_poses[:, :, :3], parts_poses[:, :, 3:7], device=self.device
+        )
+
+        robot_coord_poses_mat = self.april_coord_to_robot_coord(part_poses_mat)
         robot_coord_poses = torch.cat(C.mat2pose_batched(robot_coord_poses_mat), dim=-1)
         return robot_coord_poses
 
