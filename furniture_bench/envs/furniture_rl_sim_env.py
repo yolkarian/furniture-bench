@@ -76,6 +76,7 @@ class FurnitureSimEnv(gym.Env):
         ctrl_mode: str = "diffik",
         ee_laser: bool = False,
         april_tags=False,
+        parts_poses_in_robot_frame=False,
         **kwargs,
     ):
         """
@@ -206,6 +207,7 @@ class FurnitureSimEnv(gym.Env):
         # our flags
         self.ctrl_mode = ctrl_mode
         self.ee_laser = ee_laser
+        self.parts_poses_in_robot_frame = parts_poses_in_robot_frame
 
         self._create_ground_plane()
         self._setup_lights()
@@ -740,6 +742,9 @@ class FurnitureSimEnv(gym.Env):
     def sim_coord_to_april_coord(self, sim_coord_mat):
         return self.sim_to_april_mat @ sim_coord_mat
 
+    def sim_coord_to_robot_coord(self, sim_coord_mat):
+        return self.sim_to_robot_mat @ sim_coord_mat
+
     @property
     def april_to_sim_mat(self):
         return self.franka_from_origin_mat @ self.base_tag_from_robot_mat
@@ -1058,7 +1063,7 @@ class FurnitureSimEnv(gym.Env):
 
         return obs
 
-    def get_parts_poses(self, sim_coord=False):
+    def get_parts_poses(self, sim_coord=False, robot_coord=False):
         """Get furniture parts poses in the AprilTag frame.
 
         Args:
@@ -1073,16 +1078,24 @@ class FurnitureSimEnv(gym.Env):
         if sim_coord:
             return parts_poses.reshape(self.num_envs, -1)
 
+        if robot_coord:
+            robot_coord_poses = self.sim_pose_to_robot_pose(parts_poses)
+            return robot_coord_poses.view(self.num_envs, -1)
+
         april_coord_poses = self.sim_pose_to_april_pose(parts_poses)
         parts_poses = april_coord_poses.view(self.num_envs, -1)
 
         return parts_poses
 
-    def get_obstacle_pose(self, sim_coord=False):
+    def get_obstacle_pose(self, sim_coord=False, robot_coord=False):
         obstacle_front_poses = self.rb_states[self.obstacle_front_rb_indices, :7]
 
         if sim_coord:
             return obstacle_front_poses.reshape(self.num_envs, -1)
+
+        if robot_coord:
+            robot_coord_poses = self.sim_pose_to_robot_pose(obstacle_front_poses)
+            return robot_coord_poses.view(self.num_envs, -1)
 
         april_coord_poses = self.sim_pose_to_april_pose(obstacle_front_poses)
         return april_coord_poses.view(self.num_envs, -1)
@@ -1095,6 +1108,15 @@ class FurnitureSimEnv(gym.Env):
         april_coord_poses_mat = self.sim_coord_to_april_coord(part_poses_mat)
         april_coord_poses = torch.cat(C.mat2pose_batched(april_coord_poses_mat), dim=-1)
         return april_coord_poses
+
+    def sim_pose_to_robot_pose(self, parts_poses):
+        part_poses_mat = C.pose2mat_batched(
+            parts_poses[:, :, :3], parts_poses[:, :, 3:7], device=self.device
+        )
+
+        robot_coord_poses_mat = self.sim_coord_to_robot_coord(part_poses_mat)
+        robot_coord_poses = torch.cat(C.mat2pose_batched(robot_coord_poses_mat), dim=-1)
+        return robot_coord_poses
 
     def _save_camera_input(self):
         """Saves camera images to png files for debugging."""
@@ -1271,8 +1293,12 @@ class FurnitureSimEnv(gym.Env):
 
         if self.include_parts_poses:
             # Part poses in AprilTag.
-            parts_poses = self.get_parts_poses(sim_coord=False)
-            obstacle_poses = self.get_obstacle_pose(sim_coord=False)
+            parts_poses = self.get_parts_poses(
+                sim_coord=False, robot_coord=self.parts_poses_in_robot_frame
+            )
+            obstacle_poses = self.get_obstacle_pose(
+                sim_coord=False, robot_coord=self.parts_poses_in_robot_frame
+            )
 
             obs["parts_poses"] = torch.cat([parts_poses, obstacle_poses], dim=1)
 
