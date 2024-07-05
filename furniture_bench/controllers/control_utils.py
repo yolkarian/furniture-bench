@@ -146,6 +146,49 @@ def matrix_to_rotation_6d(matrix: torch.Tensor) -> torch.Tensor:
     return matrix[..., :2, :].clone().reshape(*matrix.size()[:-2], 6)
 
 
+def rotation_6d_to_quaternion(rot_6d: torch.Tensor) -> torch.Tensor:
+    """
+    Converts 6D rotation representation by Zhou et al. [1] to quaternions.
+    Args:
+        rot_6d: 6D rotation representation, of size (*, 6)
+
+    Returns:
+        batch of quaternions of size (*, 4)
+    """
+    rot_mats = rotation_6d_to_matrix(rot_6d)
+    return matrix_to_quaternion(rot_mats)
+
+
+def quaternion_to_rotation_6d(quat: torch.Tensor) -> torch.Tensor:
+    """
+    Converts quaternions to 6D rotation representation by Zhou et al. [1]
+    by converting the quaternion to a rotation matrix and then to 6D.
+    Args:
+        quat: batch of quaternions of size (*, 4)
+
+    Returns:
+        6D rotation representation, of size (*, 6)
+    """
+    rot_mats = quaternion_to_matrix(quat)
+    return matrix_to_rotation_6d(rot_mats)
+
+
+def quaternion_invert(quaternion):
+    """
+    Given a quaternion representing rotation, get the quaternion representing
+    its inverse.
+
+    Args:
+        quaternion: Quaternions as tensor of shape (..., 4), with real part
+            last, which must be versors (unit quaternions).
+
+    Returns:
+        The inverse, a tensor of quaternions of shape (..., 4).
+    """
+
+    return quaternion * quaternion.new_tensor([-1, -1, -1, 1])
+
+
 def standardize_quaternion(quaternions):
     """
     Convert a unit quaternion to a standard form: one in which the real
