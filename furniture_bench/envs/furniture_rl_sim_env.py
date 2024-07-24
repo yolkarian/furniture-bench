@@ -2167,9 +2167,14 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         selected_part_mask = torch.rand(total_parts, device=self.device) < 0.01
 
         # Generate random forces in the xy plane for the selected parts
-        force_theta = torch.rand(total_parts, 1, device=self.device) * 2 * np.pi
+        force_theta = (
+            torch.rand(*self.rigid_body_index_by_env.shape, 1, device=self.device)
+            * 2
+            * np.pi
+        )
         force_magnitude = (
-            torch.rand(total_parts, 1, device=self.device) * max_force_magnitude
+            torch.rand(*self.rigid_body_index_by_env.shape, 1, device=self.device)
+            * max_force_magnitude
         )
         forces = torch.cat(
             [
@@ -2179,17 +2184,19 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
             ],
             dim=-1,
         )
+
         # Scale the forces by the mass of the parts
         forces = (forces * self.force_multiplier).view(-1, 3)
 
         # Random torques
         # Generate random torques for the selected parts in the z direction
         z_torques = max_torque_magnitude * (
-            torch.rand(total_parts, 1, device=self.device) * 2 - 1
+            torch.rand(*self.rigid_body_index_by_env.shape, 1, device=self.device) * 2
+            - 1
         )
 
         # Apply the torque multiplier
-        z_torques = z_torques * self.torque_multiplier
+        z_torques = (z_torques * self.torque_multiplier).view(-1, 1)
 
         torques = torch.cat(
             [
