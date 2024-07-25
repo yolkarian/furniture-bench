@@ -9,7 +9,7 @@ from furniture_bench.furniture.furniture import Furniture
 from furniture_bench.furniture.scans.parts.mug import Mug
 from furniture_bench.furniture.scans.parts.rack import Rack
 
-SCAN_ASSET_ROOT = Path(__file__).parent.parent.parent.absolute() / "assets"
+SCAN_ASSET_ROOT = Path(__file__).parent.parent.parent.absolute() / "assets_no_tags"
 
 
 class MugRack(Furniture):
