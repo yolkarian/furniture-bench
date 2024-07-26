@@ -9,6 +9,8 @@ from furniture_bench.furniture.chair import Chair
 from furniture_bench.furniture.desk import Desk
 from furniture_bench.furniture.lamp import Lamp
 
+from furniture_bench.furniture.scans.mug_rack import MugRack
+
 
 def furniture_factory(furniture: str) -> Furniture:
     if furniture == "square_table":
@@ -29,5 +31,7 @@ def furniture_factory(furniture: str) -> Furniture:
         return Stool()
     elif furniture == "one_leg":
         return OneLeg()
+    elif furniture == "mug_rack":
+        return MugRack()
     else:
         raise ValueError(f"Unknown furniture type: {furniture}")

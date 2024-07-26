@@ -44,6 +44,7 @@ config: Dict[str, Any] = {
             "round_table": 0.065,
             "cabinet": 0.08,
             "lamp": 0.07,
+            "mug_rack": 0.07,
         },
         "position_limits": [
             [0.3, 0.8],
@@ -1994,6 +1995,24 @@ config: Dict[str, Any] = {
                     [0.0, -0.07750, 0], [0, -np.pi / 2, 0]
                 ),
             },
+        },
+        "mug_rack": {
+            "rack": {
+                "name": "rack",
+                "asset_file": "furniture/scans/urdf/mug_rack/rack.urdf",
+                "ids": [0],
+                "reset_pos": [[0.4, -0.175, 0.0025]],
+                "reset_ori": [rot_mat(np.array([np.pi / 2, 0, np.pi / 2]), hom=True)],
+            },
+            "mug": {
+                "name": "mug",
+                "asset_file": "furniture/scans/urdf/mug_rack/mug.urdf",
+                "ids": [0],
+                "reset_pos": [[0.4, 0.175, 0.0025]],
+                "reset_ori": [rot_mat(np.array([np.pi / 2, 0, 0]), hom=True)],
+            },
+            "tag_size": 0.0195,
+            "assembly_json_fname": "furniture/scans/json/mug_rack/assembly.json",
         },
     },
 }
