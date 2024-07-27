@@ -146,17 +146,17 @@ def matrix_to_rotation_6d(matrix: torch.Tensor) -> torch.Tensor:
     return matrix[..., :2, :].clone().reshape(*matrix.size()[:-2], 6)
 
 
-def rotation_6d_to_quaternion(rot_6d: torch.Tensor) -> torch.Tensor:
+def rotation_6d_to_quaternion_xyzw(rot_6d: torch.Tensor) -> torch.Tensor:
     """
     Converts 6D rotation representation by Zhou et al. [1] to quaternions.
     Args:
         rot_6d: 6D rotation representation, of size (*, 6)
 
     Returns:
-        batch of quaternions of size (*, 4)
+        batch of quaternions of size (*, 4) with real part last
     """
     rot_mats = rotation_6d_to_matrix(rot_6d)
-    return matrix_to_quaternion(rot_mats)
+    return matrix_to_quaternion_xyzw(rot_mats)
 
 
 def quaternion_to_rotation_6d(quat: torch.Tensor) -> torch.Tensor:
@@ -173,7 +173,7 @@ def quaternion_to_rotation_6d(quat: torch.Tensor) -> torch.Tensor:
     return matrix_to_rotation_6d(rot_mats)
 
 
-def quaternion_invert(quaternion):
+def quaternion_invert(quaternion: torch.Tensor) -> torch.Tensor:
     """
     Given a quaternion representing rotation, get the quaternion representing
     its inverse.
@@ -265,7 +265,7 @@ def matrix_to_axis_angle(matrix):
             turned anticlockwise in radians around the vector's
             direction.
     """
-    return quaternion_to_axis_angle(matrix_to_quaternion(matrix))
+    return quaternion_to_axis_angle(matrix_to_quaternion_xyzw(matrix))
 
 
 def quaternion_to_axis_angle(quaternions):
@@ -658,7 +658,7 @@ def mat2quat(rmat: torch.Tensor):
     return q1[inds]
 
 
-def matrix_to_quaternion(matrix):
+def matrix_to_quaternion_xyzw(matrix):
     """
     Convert rotations given as rotation matrices to quaternions.
 
@@ -751,7 +751,7 @@ def mat2pose_batched(hmat: torch.Tensor):
             and orn is (..., 4) quaternions
     """
     pos = hmat[..., :3, 3]
-    quat_xyzw = matrix_to_quaternion(hmat[..., :3, :3])
+    quat_xyzw = matrix_to_quaternion_xyzw(hmat[..., :3, :3])
     return pos, quat_xyzw
 
 
