@@ -897,11 +897,11 @@ class FurnitureSimEnv(gym.Env):
             rot_6d = action[:, 3:9]
             rot_mat = C.rotation_6d_to_matrix(rot_6d)
             # Real part is the first element in the quaternion.
-            action_quat_xyzw = C.matrix_to_quaternion(rot_mat)
+            action_quat_xyzw = C.matrix_to_quaternion_xyzw(rot_mat)
 
         else:
             # Convert axis angle to quaternion.
-            action_quat_xyzw = C.matrix_to_quaternion(
+            action_quat_xyzw = C.matrix_to_quaternion_xyzw(
                 C.axis_angle_to_matrix(action[:, 3:6])
             )
 
