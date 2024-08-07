@@ -45,6 +45,10 @@ sim_params.physx.friction_correlation_distance = 0.0005
 sim_params.physx.max_depenetration_velocity = 10
 sim_params.physx.use_gpu = True
 
+# Can set these if contacts are being weird
+# sim_params.physx.max_gpu_contact_pairs = 6553600  # 50 * 1024 * 1024
+# sim_params.physx.default_buffer_size_multiplier = 8.0
+
 
 sim_config["sim_params"] = sim_params
 sim_config["parts"] = {"friction": 0.15}
@@ -261,17 +265,21 @@ mug_asset_options.density = 100.00
 sim_config["asset"]["mug"] = mug_asset_options
 
 factory_nut_asset_options = default_asset_options()
-factory_nut_asset_options.density = 100.00
+# factory_nut_asset_options.density = 1000.00
+factory_nut_asset_options.density = 500.00
 sim_config["asset"]["factory_nut"] = factory_nut_asset_options
 
 factory_bolt_asset_options = default_asset_options()
-factory_bolt_asset_options.density = 100.00
+# factory_bolt_asset_options.density = 1000.00
+factory_bolt_asset_options.density = 500.00
 sim_config["asset"]["factory_bolt"] = factory_bolt_asset_options
 
 factory_peg_asset_options = default_asset_options()
-factory_peg_asset_options.density = 100.00
+# factory_peg_asset_options.density = 1000.00
+factory_peg_asset_options.density = 500.00
 sim_config["asset"]["factory_peg"] = factory_peg_asset_options
 
 factory_hole_asset_options = default_asset_options()
-factory_hole_asset_options.density = 100.00
+# factory_hole_asset_options.density = 1000.00
+factory_hole_asset_options.density = 500.00
 sim_config["asset"]["factory_hole"] = factory_hole_asset_options

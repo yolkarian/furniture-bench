@@ -20,7 +20,10 @@ class FactoryNutBolt(Furniture):
 
         self.tag_size = furniture_conf["tag_size"]
 
-        self.parts = [FactoryNut(furniture_conf["factory_nut"], 0), FactoryBolt(furniture_conf["factory_bolt"], 1)]
+        self.parts = [
+            FactoryNut(furniture_conf["factory_nut"], 0),
+            FactoryBolt(furniture_conf["factory_bolt"], 1),
+        ]
         self.num_parts = len(self.parts)
 
         self.should_be_assembled = [(0, 1)]
@@ -56,6 +59,6 @@ class FactoryNutBolt(Furniture):
             )
         else:
             print(
-                f"Warning! MugRack furniture class, no file names matching pattern {assembly_json_pattern} for obtaining assembly rewards"
+                f"Warning! FactoryNutBolt furniture class, no file names matching pattern {assembly_json_pattern} for obtaining assembly rewards"
             )
             self.assembled_rel_poses[(0, 1)] = np.eye(4).reshape(1, 4, 4)
