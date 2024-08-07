@@ -1821,6 +1821,12 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         elif self.furniture_name == "mug_rack":
             force_mul = [50, 20]
             torque_mul = [150, 30]
+        elif self.furniture_name == "factory_peg_hole":
+            force_mul = [50, 20]
+            torque_mul = [150, 30]
+        elif self.furniture_name == "factory_nut_bolt":
+            force_mul = [50, 20]
+            torque_mul = [150, 30]
         else:
             raise ValueError(
                 f"Have not set up the random force/torque multipliers for furniture {self.furniture_name}"
@@ -1855,6 +1861,10 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         elif self.furniture_name == "square_table":
             self.pairs_to_assemble = [(0, 1), (0, 2), (0, 3), (0, 4)]
         elif self.furniture_name == "mug_rack":
+            self.pairs_to_assemble = [(0, 1)]
+        elif self.furniture_name == "factory_peg_hole":
+            self.pairs_to_assemble = [(0, 1)]
+        elif self.furniture_name == "factory_nut_bolt":
             self.pairs_to_assemble = [(0, 1)]
         else:
             raise ValueError(
