@@ -259,3 +259,19 @@ sim_config["asset"]["rack"] = rack_asset_options
 mug_asset_options = default_asset_options()
 mug_asset_options.density = 100.00
 sim_config["asset"]["mug"] = mug_asset_options
+
+factory_nut_asset_options = default_asset_options()
+factory_nut_asset_options.density = 100.00
+sim_config["asset"]["factory_nut"] = factory_nut_asset_options
+
+factory_bolt_asset_options = default_asset_options()
+factory_bolt_asset_options.density = 100.00
+sim_config["asset"]["factory_bolt"] = factory_bolt_asset_options
+
+factory_peg_asset_options = default_asset_options()
+factory_peg_asset_options.density = 100.00
+sim_config["asset"]["factory_peg"] = factory_peg_asset_options
+
+factory_hole_asset_options = default_asset_options()
+factory_hole_asset_options.density = 100.00
+sim_config["asset"]["factory_hole"] = factory_hole_asset_options
