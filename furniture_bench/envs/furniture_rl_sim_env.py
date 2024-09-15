@@ -195,6 +195,16 @@ class FurnitureSimEnv(gym.Env):
 
         print(f"Observation keys: {self.obs_keys}")
 
+        if "factory" in self.furniture_name:
+            # Adjust simulation parameters
+            sim_config["sim_params"].dt = 1.0 / 120.0
+            sim_config["sim_params"].substeps = 4
+            sim_config["sim_params"].physx.max_gpu_contact_pairs = 6553600
+            sim_config["sim_params"].physx.default_buffer_size_multiplier = 8.0
+
+            # Adjust part friction
+            sim_config["parts"]["friction"] = 0.25
+
         # Simulator setup.
         self.isaac_gym = gymapi.acquire_gym()
         self.sim = self.isaac_gym.create_sim(
@@ -744,7 +754,7 @@ class FurnitureSimEnv(gym.Env):
 
     def sim_coord_to_robot_coord(self, sim_coord_mat):
         return self.sim_to_robot_mat @ sim_coord_mat
-    
+
     def april_coord_to_robot_coord(self, april_coord_mat):
         return self.april_to_robot_mat @ april_coord_mat
 
@@ -1120,7 +1130,7 @@ class FurnitureSimEnv(gym.Env):
         robot_coord_poses_mat = self.sim_coord_to_robot_coord(part_poses_mat)
         robot_coord_poses = torch.cat(C.mat2pose_batched(robot_coord_poses_mat), dim=-1)
         return robot_coord_poses
-    
+
     def april_pose_to_robot_pose(self, parts_poses):
         part_poses_mat = C.pose2mat_batched(
             parts_poses[:, :, :3], parts_poses[:, :, 3:7], device=self.device
@@ -1821,6 +1831,12 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         elif self.furniture_name == "mug_rack":
             force_mul = [50, 20]
             torque_mul = [150, 30]
+        elif self.furniture_name == "factory_peg_hole":
+            force_mul = [0.001, 0.001]
+            torque_mul = [0.001, 0.001]
+        elif self.furniture_name == "factory_nut_bolt":
+            force_mul = [0.001, 0.001]
+            torque_mul = [0.001, 0.001]
         else:
             raise ValueError(
                 f"Have not set up the random force/torque multipliers for furniture {self.furniture_name}"
@@ -1855,6 +1871,10 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         elif self.furniture_name == "square_table":
             self.pairs_to_assemble = [(0, 1), (0, 2), (0, 3), (0, 4)]
         elif self.furniture_name == "mug_rack":
+            self.pairs_to_assemble = [(0, 1)]
+        elif self.furniture_name == "factory_peg_hole":
+            self.pairs_to_assemble = [(0, 1)]
+        elif self.furniture_name == "factory_nut_bolt":
             self.pairs_to_assemble = [(0, 1)]
         else:
             raise ValueError(
@@ -2092,14 +2112,37 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         # Uncomment these to do tuning of initial parts positions
         # obstacle_pos_offsets[..., 0] = -0.06
         # obstacle_pos_offsets[..., 1] = -0.06
+        reset_pos = self.parts_initial_pos.clone()
+        reset_ori = self.parts_initial_ori.clone()
+        if "factory" in self.furniture_name:
+            # Sample some small offsets
+            part_pos_offsets = (
+                torch.rand(
+                    (env_idxs.numel(), self.furniture.num_parts, 3), device=self.device
+                )
+                * 2
+                - 1
+            ) * 0.01
+            part_pos_offsets[..., 2] = 0.0  # Don't move the part in the z direction
+            reset_pos = reset_pos + part_pos_offsets
+
+            part_yaw_offsets = (
+                torch.rand(
+                    (env_idxs.numel(), self.furniture.num_parts, 3), device=self.device
+                )
+                * 2
+                - 1
+            ) * np.deg2rad(45)
+            part_yaw_offsets[..., 0] = 0.0  # Don't move the part in the z direction
+            part_yaw_offsets[..., 1] = 0.0  # Don't move the part in the z direction
+
+            reset_ori = C.quaternion_multiply(
+                reset_ori, C.axis_angle_to_quaternion(part_yaw_offsets)
+            )
 
         # Reset the parts to the initial pose
-        self.root_pos[env_idxs.unsqueeze(1), self.parts_idx_list] = (
-            self.parts_initial_pos.clone()  # + obstacle_pos_offsets
-        )
-        self.root_quat[env_idxs.unsqueeze(1), self.parts_idx_list] = (
-            self.parts_initial_ori.clone()
-        )
+        self.root_pos[env_idxs.unsqueeze(1), self.parts_idx_list] = reset_pos
+        self.root_quat[env_idxs.unsqueeze(1), self.parts_idx_list] = reset_ori
 
         self.root_pos[env_idxs.unsqueeze(1), self.obstacles_idx_list] = (
             self.obstacle_initial_pos.clone() + obstacle_pos_offsets
