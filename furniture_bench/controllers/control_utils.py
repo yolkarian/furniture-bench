@@ -81,7 +81,7 @@ def quaternion_raw_multiply(a, b):
     return torch.stack((ox, oy, oz, ow), -1)
 
 
-def proprioceptive_quat_to_6d_rotation(robot_state: torch.tensor) -> torch.tensor:
+def proprioceptive_quat_to_6d_rotation(robot_state: torch.Tensor) -> torch.Tensor:
     """
     Convert the 14D proprioceptive state space to 16D state space.
 
