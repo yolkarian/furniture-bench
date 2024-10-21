@@ -125,7 +125,6 @@ class FurnitureSimEnv(gym.Env):
 
         self.assemble_idx = 0
         # Furniture for each environment (reward, reset).
-        self.furniture_name = furniture
         self.furnitures = [furniture_factory(furniture) for _ in range(num_envs)]
 
         if num_envs == 1:
@@ -139,6 +138,7 @@ class FurnitureSimEnv(gym.Env):
             furn.max_env_steps = max_env_steps
 
         self.furniture_name = furniture
+        self.task_name = furniture
         self.num_envs = num_envs
         self.obs_keys = obs_keys or DEFAULT_VISUAL_OBS
 
@@ -269,6 +269,10 @@ class FurnitureSimEnv(gym.Env):
             self.isaac_gym.set_light_parameters(
                 self.sim, 0, l_color, l_ambient, l_direction
             )
+
+    @property
+    def n_parts_assemble(self):
+        return len(self.furniture.should_be_assembled)
 
     def create_envs(self):
         table_pos = gymapi.Vec3(0.8, 0.8, 0.4)
