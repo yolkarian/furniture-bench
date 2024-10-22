@@ -17,7 +17,7 @@ except ImportError as e:
 
 
 from collections import defaultdict
-from typing import Union
+from typing import Dict, Union
 from datetime import datetime
 from pathlib import Path
 
@@ -39,7 +39,7 @@ from furniture_bench.utils.pose import get_mat, rot_mat
 from furniture_bench.envs.observation import (
     DEFAULT_VISUAL_OBS,
 )
-from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS
+from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS, ROBOT_STATES
 from furniture_bench.furniture.parts.part import Part
 
 from ipdb import set_trace as bp
@@ -1340,6 +1340,18 @@ class FurnitureSimEnv(gym.Env):
             {"task": self.furnitures[env_idx].all_assembled()}
             for env_idx in range(self.num_envs)
         ]
+    
+    def filter_and_concat_robot_state(self, robot_state: Dict[str, torch.Tensor]):
+        current_robot_state = []
+        for rs in ROBOT_STATES:
+            if rs not in robot_state:
+                continue
+
+            # if rs == "gripper_width":
+            #     robot_state[rs] = robot_state[rs].reshape(-1, 1)
+            current_robot_state.append(robot_state[rs])
+        return torch.cat(current_robot_state, dim=-1)
+
 
     def reset(self):
         print("In orignal reset")
