@@ -811,8 +811,11 @@ class FurnitureSimEnv(gym.Env):
     @property
     def observation_space(self):
         low, high = -np.inf, np.inf
+
         # Now we also include the obstacle in the pose list.
-        parts_poses = (self.furniture.num_parts + 1) * self.pose_dim
+        parts_poses = (
+            self.furniture.num_parts + int(self.include_parts_poses)
+        ) * self.pose_dim
         img_size = reversed(self.img_size)
         img_shape = (3, *img_size) if self.channel_first else (*img_size, 3)
 
@@ -1340,7 +1343,7 @@ class FurnitureSimEnv(gym.Env):
             {"task": self.furnitures[env_idx].all_assembled()}
             for env_idx in range(self.num_envs)
         ]
-    
+
     def filter_and_concat_robot_state(self, robot_state: Dict[str, torch.Tensor]):
         current_robot_state = []
         for rs in ROBOT_STATES:
@@ -1351,7 +1354,6 @@ class FurnitureSimEnv(gym.Env):
             #     robot_state[rs] = robot_state[rs].reshape(-1, 1)
             current_robot_state.append(robot_state[rs])
         return torch.cat(current_robot_state, dim=-1)
-
 
     def reset(self):
         print("In orignal reset")

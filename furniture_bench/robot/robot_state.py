@@ -26,6 +26,8 @@ ROBOT_STATE_DIMS = {
     "joint_velocities": 7,
     "joint_torques": 7,
     "gripper_width": 1,
+    "gripper_finger_1_pos": 1,
+    "gripper_finger_2_pos": 1,
 }
 
 
