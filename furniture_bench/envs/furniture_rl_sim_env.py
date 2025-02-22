@@ -15,6 +15,18 @@ except ImportError as e:
     print()
     raise ImportError(e)
 
+## Import 
+import sapien.core
+import sapien
+import sapien.physx
+import sapien.render
+import sapien.utils.viewer.control_window
+from furniture_bench.utils.sapien import (
+    load_scene_config,
+    load_asset_with_options
+)
+import os
+import numpy as np
 
 from collections import defaultdict
 from typing import Dict, Union
@@ -206,13 +218,20 @@ class FurnitureSimEnv(gym.Env):
             sim_config["parts"]["friction"] = 0.25
 
         # Simulator setup.
-        self.isaac_gym = gymapi.acquire_gym()
-        self.sim = self.isaac_gym.create_sim(
-            compute_device_id,
-            graphics_device_id,
-            gymapi.SimType.SIM_PHYSX,
-            sim_config["sim_params"],
-        )
+        # TODO: Change the simulator here
+        self.sapien_scene:sapien.Scene = sapien.Scene()
+        load_scene_config(self.sapien_scene, sim_config["sim_params"])
+        self.assets_loader = self.sapien_scene.create_urdf_loader() # load static root
+        self.assets_loader.fix_root_link = True
+
+
+        # self.isaac_gym = gymapi.acquire_gym()
+        # self.sim = self.isaac_gym.create_sim(
+        #     compute_device_id,
+        #     graphics_device_id,
+        #     gymapi.SimType.SIM_PHYSX,
+        #     sim_config["sim_params"],
+        # )
 
         # our flags
         self.ctrl_mode = ctrl_mode
@@ -257,18 +276,24 @@ class FurnitureSimEnv(gym.Env):
 
     def _create_ground_plane(self):
         """Creates ground plane."""
-        plane_params = gymapi.PlaneParams()
-        plane_params.normal = gymapi.Vec3(0, 0, 1)
-        self.isaac_gym.add_ground(self.sim, plane_params)
+        
+        self.sapien_scene.add_ground(altitude=0)
+
+        # plane_params = gymapi.PlaneParams()
+        # plane_params.normal = gymapi.Vec3(0, 0, 1)
+        # self.isaac_gym.add_ground(self.sim, plane_params)
 
     def _setup_lights(self):
         for light in sim_config["lights"]:
-            l_color = gymapi.Vec3(*light["color"])
-            l_ambient = gymapi.Vec3(*light["ambient"])
-            l_direction = gymapi.Vec3(*light["direction"])
-            self.isaac_gym.set_light_parameters(
-                self.sim, 0, l_color, l_ambient, l_direction
-            )
+            self.sapien_scene.add_directional_light(light["direction"], light["color"])
+            self.sapien_scene.set_ambient_light(light["ambient"])
+            
+            # l_color = gymapi.Vec3(*light["color"])
+            # l_ambient = gymapi.Vec3(*light["ambient"])
+            # l_direction = gymapi.Vec3(*light["direction"])
+            # self.isaac_gym.set_light_parameters(
+            #     self.sim, 0, l_color, l_ambient, l_direction
+            # )
 
     @property
     def n_parts_assemble(self):
@@ -1606,24 +1631,33 @@ class FurnitureSimEnv(gym.Env):
         )
 
     def _import_base_tag_asset(self):
-        asset_options = gymapi.AssetOptions()
-        asset_options.fix_base_link = True
+
         base_asset_file = "furniture/urdf/base_tag.urdf"
-        return self.isaac_gym.load_asset(
-            self.sim, ASSET_ROOT, base_asset_file, asset_options
-        )
+        asset_file = os.path.join(ASSET_ROOT, base_asset_file)
+        return self.assets_loader.load(asset_file, package_dir=ASSET_ROOT)
+        
+
+        # asset_options = gymapi.AssetOptions()
+        # asset_options.fix_base_link = True
+        # base_asset_file = "furniture/urdf/base_tag.urdf"
+        # return self.isaac_gym.load_asset(
+        #     self.sim, ASSET_ROOT, base_asset_file, asset_options
+        # )
 
     def _import_part_assets(self):
         part_assets = {}
         for part in self.furniture.parts:
             asset_option = sim_config["asset"][part.name]
-            part_assets[part.name] = self.isaac_gym.load_asset(
-                self.sim, ASSET_ROOT, part.asset_file, asset_option
-            )
+            part_assets[part.name] = load_asset_with_options(self.assets_loader, ASSET_ROOT, part.asset_file, asset_option)
+            
 
         return part_assets
 
     def _import_obstacle_asset(self):
+        obstacle_asset_file = "furniture/urdf/obstacle.urdf"
+        asset_file = os.path.join(ASSET_ROOT, obstacle_asset_file)
+        return self.assets_loader.load(asset_file, package_dir=ASSET_ROOT)
+    
         asset_options = gymapi.AssetOptions()
         asset_options.fix_base_link = True
         obstacle_asset_file = "furniture/urdf/obstacle.urdf"
@@ -1632,6 +1666,10 @@ class FurnitureSimEnv(gym.Env):
         )
 
     def _import_background_asset(self):
+        background_asset_file = "furniture/urdf/background.urdf"
+        asset_file = os.path.join(ASSET_ROOT, background_asset_file)
+        return self.assets_loader.load(asset_file, package_dir=ASSET_ROOT)
+        
         asset_options = gymapi.AssetOptions()
         asset_options.fix_base_link = True
         background_asset_file = "furniture/urdf/background.urdf"
@@ -1640,6 +1678,10 @@ class FurnitureSimEnv(gym.Env):
         )
 
     def _import_table_asset(self):
+        table_asset_file = "furniture/urdf/table.urdf"
+        asset_file = os.path.join(ASSET_ROOT, table_asset_file)
+        return self.assets_loader.load(asset_file, package_dir=ASSET_ROOT)
+    
         asset_options = gymapi.AssetOptions()
         asset_options.fix_base_link = True
         table_asset_file = "furniture/urdf/table.urdf"
@@ -1648,6 +1690,10 @@ class FurnitureSimEnv(gym.Env):
         )
 
     def _import_obstacle_front_asset(self):
+        obstacle_front_asset_file = "furniture/urdf/obstacle_front.urdf"
+        asset_file = os.path.join(ASSET_ROOT, obstacle_front_asset_file)
+        return self.assets_loader.load(asset_file, package_dir=ASSET_ROOT)
+        
         asset_options = gymapi.AssetOptions()
         asset_options.fix_base_link = True
         obstacle_asset_file = "furniture/urdf/obstacle_front.urdf"
@@ -1656,6 +1702,10 @@ class FurnitureSimEnv(gym.Env):
         )
 
     def _import_obstacle_side_asset(self):
+        obstacle_side_asset_file = "furniture/urdf/obstacle_side.urdf"
+        asset_file = os.path.join(ASSET_ROOT, obstacle_side_asset_file)
+        return self.assets_loader.load(asset_file, package_dir=ASSET_ROOT)
+    
         asset_options = gymapi.AssetOptions()
         asset_options.fix_base_link = True
         obstacle_asset_file = "furniture/urdf/obstacle_side.urdf"
@@ -1667,6 +1717,20 @@ class FurnitureSimEnv(gym.Env):
         self.franka_asset_file = (
             "franka_description_ros/franka_description/robots/franka_panda.urdf"
         )
+        asset_file = os.path.join(ASSET_ROOT, self.franka_asset_file)
+        franka = self.assets_loader.load(asset_file)
+        for link in franka.links:
+            link.set_disable_gravity(True) 
+        for joint in franka.joints:
+            joint.set_armature(np.array([[0.01]], dtype=np.float32))
+        # The robot mesh should be flipped
+        return franka 
+    
+        # components = franka.root.get_entity().find_component_by_type(sapien.physx.PhysxRigidBodyComponent)
+        # for component in components:
+        #     component: sapien.physx.PhysxRigidBodyComponent
+        #     component.set_disable_gravity(True)    
+
         asset_options = gymapi.AssetOptions()
         asset_options.armature = 0.01
         asset_options.thickness = 0.001

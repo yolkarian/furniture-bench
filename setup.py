@@ -18,7 +18,7 @@ core_requirements = [
 ]
 
 setup(
-    name="furniture_bench",
+    name="furniture_bench_sapien",
     version="0.1",
     author="CLVR @ KAIST",
     author_email="clvr.kaist@gmail.com",
@@ -28,6 +28,6 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(),
     include_package_data=True,
-    python_requires=">3.7,<3.9",
+    python_requires=">3.8,<3.10",
     install_requires=core_requirements,
 )
