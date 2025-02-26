@@ -40,6 +40,8 @@ class PhysxParams:
     max_depenetration_velocity: float = 10
     num_threads: int = 0
     use_gpu:bool = False
+    max_gpu_contact_pairs:int = 6553600
+    default_buffer_size_multiplier:int = 8.0
 
     # TODO: introduce params for contact control       
     # sapien.physx.set_gpu_memory_config(max_rigid_contact_count=6553600)
@@ -48,10 +50,10 @@ class PhysxParams:
 @dataclass
 class SimParams:
     # up_axis
-    gravity: np.ndarray
-    dt: float
-    substeps: int
-    use_gpu_pipeline: bool
+    gravity: np.ndarray = np.array([0.0, 0.0, -9.8], dtype=np.float32)
+    dt: float = 1.0 / 60.0
+    substeps: int = 2
+    use_gpu_pipeline: bool = True
     physx: PhysxParams = PhysxParams()
 
 @dataclass
@@ -60,7 +62,7 @@ class AssetOptions:
     fix_base_link:bool = False
     thickness:float = 0.0
     density:float = 600.0
-    armature:NDArray[np.float32] = np.array([[0.01]], dtype=np.float32)
+    armature:float = 0.01
     linear_damping:float = 0.0
     max_linear_velocity:float = 1000.0
     angular_damping:float = 0.0

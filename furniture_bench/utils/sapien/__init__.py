@@ -6,8 +6,11 @@ import os
 
 import sapien.wrapper.scene
 import sapien.wrapper.urdf_loader
-from ..sim_config_sapien import SimParams, AssetOptions
-
+from sapien.wrapper.articulation_builder import ActorBuilder, ArticulationBuilder
+from sapien.render import RenderCameraComponent 
+from ...sim_config_sapien import SimParams, AssetOptions
+from .urdf_loader import URDFLoader
+from typing import List, Tuple, Union
 
 # Temporily Scene loading for the scene
 def load_scene_config(scene: sapien.Scene, cfg: SimParams) -> None:
@@ -58,20 +61,26 @@ def load_scene_config(scene: sapien.Scene, cfg: SimParams) -> None:
     sapien.physx.set_body_config(body_config)
 
 
-def load_asset_with_options(loader:sapien.wrapper.urdf_loader.URDFLoader,asset_root:str, asset_path:str, options:AssetOptions) -> sapien.physx.PhysxArticulation:
-    asset_file = os.path.join(asset_root, asset_path)
-    tmp_fix_root_link = loader.fix_root_link
-    loader.fix_root_link = options.fix_base_link  # dynamic 
-    asset = loader.load(asset_file, package_dir=asset_root)
-    loader.fix_root_link = tmp_fix_root_link
-
-    for link in asset.links:
-        link.set_angular_damping(options.angular_damping)
-        link.set_linear_damping(options.linear_damping)
-        link.set_disable_gravity(options.disable_gravity)
-        for collision_shape in link.collision_shapes:
-            collision_shape.set_density(options.density)  # TODO(Yuke): is this implementation correct or not?
-    for joint in asset.joints:
-        joint.set_armature(options.armature)
-    
-    return asset
+def generate_builder_with_options(loader:URDFLoader,asset_root:str, asset_path:str, options:AssetOptions) -> Union[ArticulationBuilder, ActorBuilder]:
+    loader.fix_root_link = options.fix_base_link
+    full_path = os.path.join(asset_root, asset_path)
+    articulator_builders, actor_builders = loader.parse(full_path, package_dir=asset_root)
+    if len(articulator_builders)!=0:
+        builder = articulator_builders[0]
+        for link_builder in builder.link_builders:
+            link_builder.disable_gravity = options.disable_gravity  
+            link_builder.linear_damping = options.linear_damping 
+            link_builder.angular_damping = options.angular_damping
+            for collision_record in link_builder.collision_records:
+                collision_record.density = options.density
+            link_builder.joint_record.armature = options.armature
+        return builder 
+        
+    builder = actor_builders[0]
+    builder.disable_gravity = options.disable_gravity  
+    builder.linear_damping = options.linear_damping 
+    builder.angular_damping = options.angular_damping
+    for collision_record in builder.collision_records:
+        collision_record.density = options.density
+    # there is no joint for actor
+    return builder

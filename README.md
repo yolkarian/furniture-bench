@@ -50,3 +50,8 @@ If you find FurnitureBench useful for your research, please cite this work:
 - VIP: https://github.com/facebookresearch/vip
 - Factory: https://github.com/NVIDIA-Omniverse/IsaacGymEnvs/blob/main/docs/factory.md
 - OSC controller references: https://github.com/StanfordVL/perls2 and https://github.com/ARISE-Initiative/robomimic and https://github.com/ARISE-Initiative/robosuite
+
+
+## TODO
+
+- Implement self-collision avoidance
