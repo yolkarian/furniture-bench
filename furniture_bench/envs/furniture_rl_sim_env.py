@@ -6,12 +6,12 @@ from ..utils.sapien.urdf_loader import URDFLoader
 import sapien.utils.viewer.control_window
 from furniture_bench.utils.sapien import (
     load_scene_config,
-    generate_builder_with_options
+    generate_builder_with_options,
 )
 import os
 import numpy as np
 import scipy
-import scipy.spatial 
+import scipy.spatial
 
 from collections import defaultdict
 from typing import Dict, Union
@@ -30,6 +30,7 @@ from furniture_bench.envs.initialization_mode import Randomness, str_to_enum
 from furniture_bench.controllers.diffik import diffik_factory
 
 from furniture_bench.furniture import furniture_factory
+
 # from furniture_bench.sim_config import sim_config
 from furniture_bench.config import ROBOT_HEIGHT, config
 from furniture_bench.utils.pose import get_mat, rot_mat
@@ -111,9 +112,9 @@ class FurnitureSimEnv(gym.Env):
             global ASSET_ROOT
             ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets")
 
-        assert (
-            ctrl_mode == "diffik"
-        ), "Only 'diffik' controller is supported for now (parallization)."
+        assert ctrl_mode == "diffik", (
+            "Only 'diffik' controller is supported for now (parallization)."
+        )
 
         self.pos_scalar = kwargs.get("pos_scalar", 1.0)
         self.rot_scalar = kwargs.get("rot_scalar", 1.0)
@@ -160,7 +161,6 @@ class FurnitureSimEnv(gym.Env):
 
         self.record = record
         if self.record:
-
             if not all([k in self.obs_keys for k in ["color_image1", "color_image2"]]):
                 # Add the camera images to the observation keys.
                 print(
@@ -213,6 +213,8 @@ class FurnitureSimEnv(gym.Env):
         # load_scene_config(self.sapien_scene, sim_config["sim_params"])
         # self.assets_loader = self.sapien_scene.create_urdf_loader() # load static root
         # self.assets_loader.fix_root_link = True
+        if sim_config["sim_params"].use_gpu_pipeline:
+            sapien.physx.enable_gpu() # According tp the comment in the C++ code
         self.urdf_builder_generator = URDFLoader()
         self.urdf_builder_generator.fix_root_link = True
 
@@ -221,11 +223,9 @@ class FurnitureSimEnv(gym.Env):
         self.ee_laser = ee_laser
         self.parts_poses_in_robot_frame = parts_poses_in_robot_frame
 
-        
         self.import_assets()
         self._create_ground_plane()
         self.create_subscenes()
-
 
         self._setup_lights()
         self.set_viewer()
@@ -260,14 +260,20 @@ class FurnitureSimEnv(gym.Env):
 
         print(f"Sim steps: {self.sim_steps}")
 
-    def _create_ground_plane(self, enable_render:bool=True, render_material:Union[sapien.render.RenderMaterial, None, Tuple[float,float,float]] = None):
+    def _create_ground_plane(
+        self,
+        enable_render: bool = True,
+        render_material: Union[
+            sapien.render.RenderMaterial, None, Tuple[float, float, float]
+        ] = None,
+    ):
         """Creates ground plane."""
         self._ground_builder = sapien.ActorBuilder()
         self._ground_builder.set_physx_body_type("static")
         self._ground_builder.add_plane_collision(
-            sapien.Pose(p = [0, 0, 0]),q=[0.7071068, 0, -0.7071068, 0]
+            sapien.Pose(p=[0, 0, 0]), q=[0.7071068, 0, -0.7071068, 0]
         )
-        self._ground_builder.set_initial_pose(sapien.Pose(p=[0,0,0]))
+        self._ground_builder.set_initial_pose(sapien.Pose(p=[0, 0, 0]))
         if enable_render:
             self._ground_builder.add_plane_visual(
                 sapien.Pose(p=[0, 0, 0], q=[0.7071068, 0, -0.7071068, 0]),
@@ -276,7 +282,6 @@ class FurnitureSimEnv(gym.Env):
                 "ground_visual",
             )
         self._ground_builder.set_name("ground")
-        
 
     def _setup_lights(self):
         for light in sim_config["lights"]:
@@ -293,7 +298,7 @@ class FurnitureSimEnv(gym.Env):
         table_half_width = 0.015
         table_surface_z = table_pos[2] + table_half_width
         self.franka_pose = sapien.Pose(
-            p = [0.5 * -table_pos[0] + 0.1, 0, table_surface_z + ROBOT_HEIGHT],
+            p=[0.5 * -table_pos[0] + 0.1, 0, table_surface_z + ROBOT_HEIGHT],
         )
 
         self.franka_from_origin_mat = get_mat(
@@ -316,67 +321,84 @@ class FurnitureSimEnv(gym.Env):
         self.envs = []
         self.env_steps = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
 
-        self.handles = {}
+        self.entities = {}
         self.ee_idxs = []
-        self.ee_handles = []
+        self.ee_entities = []
 
         self.base_tag_pose = sapien.Pose()
         base_tag_pos = T.pos_from_mat(config["robot"]["tag_base_from_robot_base"])
         self.base_tag_pose.p = self.franka_pose.p + np.array(
-            [base_tag_pos[0], base_tag_pos[1], -ROBOT_HEIGHT],
-            dtype=np.float32
+            [base_tag_pos[0], base_tag_pos[1], -ROBOT_HEIGHT], dtype=np.float32
         )
         self.base_tag_pose.p[2] = table_surface_z
 
         self.obstacle_front_pose = sapien.Pose()
         self.obstacle_front_pose.p = np.array(
-            [self.base_tag_pose.p[0] + 0.37 + 0.01, 0.0, table_surface_z + 0.015], dtype=np.float32
+            [self.base_tag_pose.p[0] + 0.37 + 0.01, 0.0, table_surface_z + 0.015],
+            dtype=np.float32,
         )
-        self.obstacle_front_pose.q = scipy.spatial.transform.Rotation.from_rotvec(np.array([0, 0, 1]) * 0.5 * np.pi).as_quat().astype(np.float32)
+        self.obstacle_front_pose.q = (
+            scipy.spatial.transform.Rotation.from_rotvec(
+                np.array([0, 0, 1]) * 0.5 * np.pi
+            )
+            .as_quat()
+            .astype(np.float32)
+        )
 
         self.obstacle_right_pose = sapien.Pose()
-        self.obstacle_right_pose.p = np.array( [
-            self.obstacle_front_pose.p[0]- 0.075,
-            self.obstacle_front_pose.p[1]- 0.175,
-            self.obstacle_front_pose.p[2]], dtype=np.float32
+        self.obstacle_right_pose.p = np.array(
+            [
+                self.obstacle_front_pose.p[0] - 0.075,
+                self.obstacle_front_pose.p[1] - 0.175,
+                self.obstacle_front_pose.p[2],
+            ],
+            dtype=np.float32,
         )
-        self.obstacle_right_pose.q= self.obstacle_front_pose.q
+        self.obstacle_right_pose.q = self.obstacle_front_pose.q
 
         self.obstacle_left_pose = sapien.Pose
-        self.obstacle_left_pose.p = np.array([
-            self.obstacle_front_pose.p[0] - 0.075,
-            self.obstacle_front_pose.p[1] + 0.175,
-            self.obstacle_front_pose.p[2]], dtype=np.float32
+        self.obstacle_left_pose.p = np.array(
+            [
+                self.obstacle_front_pose.p[0] - 0.075,
+                self.obstacle_front_pose.p[1] + 0.175,
+                self.obstacle_front_pose.p[2],
+            ],
+            dtype=np.float32,
         )
         self.obstacle_left_pose.q = self.obstacle_front_pose.q
 
         self.base_idxs = []
         self.part_idxs = defaultdict(list)
         self.franka_entities = []
+                    
+        self.parts_entities = {} # entities of part in env 1
         self._subscenes = []
         scene_grid_length = int(np.ceil(np.sqrt(self.num_envs)))
-        physx_system = sapien.physx.PhysxGpuSystem(device=sapien.Device(self.device.type)) # cuda for the rendering
-
+        physx_system = sapien.physx.PhysxGpuSystem(
+            device=sapien.Device(self.device.type)
+        )  # cuda for the rendering
 
         for i in range(self.num_envs):
             scene_x, scene_y = (
-                    i % scene_grid_length - scene_grid_length // 2,
-                    i // scene_grid_length - scene_grid_length // 2,
-                )
+                i % scene_grid_length - scene_grid_length // 2,
+                i // scene_grid_length - scene_grid_length // 2,
+            )
             scene = sapien.Scene(
-                    systems=[physx_system, sapien.render.RenderSystem(self.device.type)] # cuda for the rendering
-                )
+                systems=[
+                    physx_system,
+                    sapien.render.RenderSystem(self.device.type),
+                ]  # cuda for the rendering
+            )
             load_scene_config(scene, sim_config["sim_params"])
             physx_system.set_scene_offset(
-                    scene,
-                    [
-                        scene_x * spacing,
-                        scene_y * spacing,
-                        0,
-                    ],
-                )
-            self._subscenes.append()
-
+                scene,
+                [
+                    scene_x * spacing,
+                    scene_y * spacing,
+                    0,
+                ],
+            )
+            self._subscenes.append(scene)
 
             # Add workspace (table).
             table_pose = sapien.Pose()
@@ -386,12 +408,16 @@ class FurnitureSimEnv(gym.Env):
             table_entity = self.table_asset.build(f"table_{i}")
 
             # table Compenent Set
-            table_props = table_entity.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent)
-            table_props:sapien.physx.PhysxRigidDynamicComponent
+            table_props = table_entity.find_component_by_type(
+                sapien.physx.PhysxRigidDynamicComponent
+            )
+            table_props: sapien.physx.PhysxRigidDynamicComponent
             for collision_shape in table_props.collision_shapes:
                 mt = collision_shape.get_physical_material()
-                mt.static_friction = 1.01 * sim_config["table"]["friction"]  # static friction is slightly larger that dynamic friction
-                mt.dynamic_friction = sim_config["table"]["friction"]
+                mt.set_static_friction(
+                    1.01 * sim_config["table"]["friction"]
+                )  # static friction is slightly larger that dynamic friction
+                mt.set_dynamic_friction(sim_config["table"]["friction"])
                 collision_shape.set_physical_material(mt)
             # TODO(Yuke): check whether actually the friction changes or not.
 
@@ -433,20 +459,14 @@ class FurnitureSimEnv(gym.Env):
             franka_entity = self.franka_asset.build()
             franka_entity.set_name(f"franka_{i}")
             self.franka_num_dofs = franka_entity.get_dof()
-            
 
             # TODO(Yuke): force sensor
             # self.isaac_gym.enable_actor_dof_force_sensors(env, franka_handle)
             self.franka_entities.append(franka_entity)
 
-
             # TODO(Yuke): To inspect whether the index here is global index or not. Get global index of hand and base.
-            self.ee_idxs.append(
-                franka_entity.find_link_by_name("panda_link0")
-            )
-            self.ee_handles.append(
-                franka_entity.find_link_by_name("panda_link0")
-            )
+            self.ee_idxs.append(franka_entity.find_link_by_name("panda_link0"))
+            self.ee_entities.append(franka_entity.find_link_by_name("panda_link0"))
             self.base_idxs.append(
                 franka_entity.find_link_by_name("k_ee_link").get_index()
             )
@@ -454,68 +474,65 @@ class FurnitureSimEnv(gym.Env):
             franka_dof_props = self.isaac_gym.get_asset_dof_properties(
                 self.franka_asset
             )
-            if self.ctrl_mode == "osc":
-                franka_dof_props["driveMode"][:7].fill(gymapi.DOF_MODE_EFFORT)
-                franka_dof_props["stiffness"][:7].fill(0.0)
-                franka_dof_props["damping"][:7].fill(0.0)
-                franka_dof_props["friction"][:7] = sim_config["robot"]["arm_frictions"]
-            else:
-                franka_dof_props["driveMode"][:7].fill(gymapi.DOF_MODE_POS)
-                franka_dof_props["stiffness"][:7].fill(self.stiffness)
-                franka_dof_props["damping"][:7].fill(self.damping)
-                # print(f"Stiffness: {self.stiffness}, Damping: {self.damping}")
-            # Grippers
-            franka_dof_props["driveMode"][7:].fill(gymapi.DOF_MODE_EFFORT)
-            franka_dof_props["stiffness"][7:].fill(0)
-            franka_dof_props["damping"][7:].fill(0)
-            franka_dof_props["friction"][7:] = sim_config["robot"]["gripper_frictions"]
-            franka_dof_props["upper"][7:] = self.max_gripper_width / 2
+            for i, joint in enumerate(franka_entity.active_joints):
+                if i < 7:
+                    # NOTE(Yuke): use the internal PD controller to control
+                    joint.set_drive_properties(
+                        stiffness=self.stiffness, damping=self.damping, mode="force"
+                    )
+                    joint.set_friction(sim_config["robot"]["arm_frictions"])
+                    continue
+                joint.set_drive_properties(
+                        stiffness=0, damping=0, mode="force"
+                    )
+                joint.set_friction(sim_config["robot"]["gripper_frictions"])
+                joint.set_limits([0, self.max_gripper_width / 2])
 
-            self.isaac_gym.set_actor_dof_properties(
-                env, franka_handle, franka_dof_props
-            )
             # Set initial dof states
-            franka_num_dofs = self.isaac_gym.get_asset_dof_count(self.franka_asset)
-            self.default_dof_pos = np.zeros(franka_num_dofs, dtype=np.float32)
+
+            self.default_dof_pos = np.zeros(self.franka_num_dofs, dtype=np.float32)
             self.default_dof_pos[:7] = np.array(
                 config["robot"]["reset_joints"], dtype=np.float32
             )
             self.default_dof_pos[7:] = self.max_gripper_width / 2
-            default_dof_state = np.zeros(franka_num_dofs, gymapi.DofState.dtype)
-            default_dof_state["pos"] = self.default_dof_pos
-            self.isaac_gym.set_actor_dof_states(
-                env, franka_handle, default_dof_state, gymapi.STATE_ALL
-            )
+            franka_entity.set_qpos(self.default_dof_pos[:,])
 
             # Add furniture parts.
             poses = []
+
             for part in self.furniture.parts:
                 pos, ori = self._get_reset_pose(part)
                 part_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
-                part_pose = gymapi.Transform()
-                part_pose.p = gymapi.Vec3(
-                    part_pose_mat[0, 3], part_pose_mat[1, 3], part_pose_mat[2, 3]
+                part_pose = sapien.Pose()
+                part_pose.set_p(
+                    [part_pose_mat[0, 3], part_pose_mat[1, 3], part_pose_mat[2, 3]]
                 )
                 reset_ori = self.april_coord_to_sim_coord(ori)
-                part_pose.r = gymapi.Quat(*T.mat2quat(reset_ori[:3, :3]))
+                part_pose.set_q(np.array(T.mat2quat(reset_ori[:3, :3]),dtype=np.float32))
                 poses.append(part_pose)
-                part_handle = self.isaac_gym.create_actor(
-                    env, self.part_assets[part.name], part_pose, part.name, i, 0
-                )
-                self.handles[part.name] = part_handle
 
-                part_idx = self.isaac_gym.get_actor_rigid_body_index(
-                    env, part_handle, 0, gymapi.DOMAIN_SIM
-                )
-                # Set properties of part.
-                part_props = self.isaac_gym.get_actor_rigid_shape_properties(
-                    env, part_handle
-                )
-                part_props[0].friction = sim_config["parts"]["friction"]
-                self.isaac_gym.set_actor_rigid_shape_properties(
-                    env, part_handle, part_props
-                )
+                self.part_assets[part.name].set_scene(scene)
+                part_entitiy = self.part_assets[part.name].build(part.name)
+                component:sapien.physx.PhysxRigidBaseComponent = part_entitiy.find_component_by_type(sapien.physx.PhysxRigidBaseComponent)
+                for collision_shape in component.collision_shapes:
+                    # upper 16 must be the same to have collision
+                    # TODO: need testing
+                    groups = collision_shape.get_collision_groups()
+                    collision_shape.get_physical_material()
+                    groups[3] = i << 16 
+                    collision_shape.set_collision_groups(groups)
+                    mt = collision_shape.get_physical_material()
+                    mt.set_static_friction(1.01*sim_config["parts"]["friction"])
 
+                    mt.set_dynamic_friction(sim_config["parts"]["friction"])
+                    collision_shape.set_physical_material(mt)
+
+                
+
+                part_idx = part_entitiy.get_global_id()
+                if i == 0:
+                    self.entities[part.name] = part_entitiy
+                
                 self.part_idxs[part.name].append(part_idx)
 
         # Make a tensor that contains the RB indices of all the furniture parts.
@@ -544,11 +561,9 @@ class FurnitureSimEnv(gym.Env):
         ).unsqueeze(1)
 
         # This only needs to happen once
-        self.parts_handles = {}
+        
         for part in self.furniture.parts:
-            self.parts_handles[part.name] = self.isaac_gym.find_actor_index(
-                self.envs[0], part.name, gymapi.DOMAIN_ENV
-            )
+            self.parts_entities[part.name] = scene.get
 
         self.obstacle_handles = []
         for name in ["obstacle_front", "obstacle_right", "obstacle_left"]:
@@ -737,13 +752,13 @@ class FurnitureSimEnv(gym.Env):
                 self.camera_obs[k].append(tensor)
 
     def import_assets(self):
-        self.base_tag_asset:ActorBuilder = self._import_base_tag_asset()
+        self.base_tag_asset: ActorBuilder = self._import_base_tag_asset()
         self.background_asset: ActorBuilder = self._import_background_asset()
-        self.table_asset:ActorBuilder = self._import_table_asset()
-        self.obstacle_front_asset:ActorBuilder = self._import_obstacle_front_asset()
-        self.obstacle_side_asset:ActorBuilder = self._import_obstacle_side_asset()
-        self.franka_asset:ArticulationBuilder = self._import_franka_asset()
-        self.part_assets:Dict[str, ActorBuilder] = self._import_part_assets()
+        self.table_asset: ActorBuilder = self._import_table_asset()
+        self.obstacle_front_asset: ActorBuilder = self._import_obstacle_front_asset()
+        self.obstacle_side_asset: ActorBuilder = self._import_obstacle_side_asset()
+        self.franka_asset: ArticulationBuilder = self._import_franka_asset()
+        self.part_assets: Dict[str, ActorBuilder] = self._import_part_assets()
 
     def acquire_base_tensors(self):
         # Get rigid body state tensor
@@ -877,7 +892,6 @@ class FurnitureSimEnv(gym.Env):
         return gym.spaces.Dict(obs_dict)
 
     def _handle_bulb_rest_pose(self):
-
         # if we're not in lamp mode
         if self.furniture_name != "lamp":
             return False, None
@@ -938,7 +952,6 @@ class FurnitureSimEnv(gym.Env):
         )
 
     def simulate_step(self, action):
-
         # Clip the action to be within the action space.
         action = torch.clamp(action, self.act_low, self.act_high)
 
@@ -1020,7 +1033,6 @@ class FurnitureSimEnv(gym.Env):
         # specific to lamp task (will be ignored if not in "lamp" task)
         any_bulbs_unsettled, rest_bulb_env_idxs = self._handle_bulb_rest_pose()
         for _ in range(self.sim_steps):
-
             if any_bulbs_unsettled:
                 self._set_bulb_poses(env_idxs=rest_bulb_env_idxs)
 
@@ -1637,17 +1649,20 @@ class FurnitureSimEnv(gym.Env):
         )
 
     def _import_base_tag_asset(self):
-
         asset_file = "furniture/urdf/base_tag.urdf"
         asset_options = AssetOptions()
         asset_options.fix_base_link = True
-        return generate_builder_with_options(self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options)
+        return generate_builder_with_options(
+            self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options
+        )
 
     def _import_part_assets(self):
         part_builders = {}
         for part in self.furniture.parts:
             asset_option = sim_config["asset"][part.name]
-            part_builders[part.name] = generate_builder_with_options(self.urdf_builder_generator, ASSET_ROOT, part.asset_file, asset_option)
+            part_builders[part.name] = generate_builder_with_options(
+                self.urdf_builder_generator, ASSET_ROOT, part.asset_file, asset_option
+            )
         # TODO: Setup params for these parts
         return part_builders
 
@@ -1655,33 +1670,41 @@ class FurnitureSimEnv(gym.Env):
         asset_file = "furniture/urdf/obstacle.urdf"
         asset_options = AssetOptions()
         asset_options.fix_base_link = True
-        return generate_builder_with_options(self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options)
-
+        return generate_builder_with_options(
+            self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options
+        )
 
     def _import_background_asset(self):
         asset_file = "furniture/urdf/background.urdf"
         asset_options = AssetOptions()
         asset_options.fix_base_link = True
-        return generate_builder_with_options(self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options)
+        return generate_builder_with_options(
+            self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options
+        )
 
-        
     def _import_table_asset(self):
         asset_file = "furniture/urdf/table.urdf"
         asset_options = AssetOptions()
         asset_options.fix_base_link = True
-        return generate_builder_with_options(self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options)
+        return generate_builder_with_options(
+            self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options
+        )
 
     def _import_obstacle_front_asset(self):
         asset_file = "furniture/urdf/obstacle_front.urdf"
         asset_options = AssetOptions()
         asset_options.fix_base_link = True
-        return generate_builder_with_options(self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options)
+        return generate_builder_with_options(
+            self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options
+        )
 
     def _import_obstacle_side_asset(self):
         asset_file = "furniture/urdf/obstacle_side.urdf"
         asset_options = AssetOptions()
         asset_options.fix_base_link = True
-        return generate_builder_with_options(self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options)
+        return generate_builder_with_options(
+            self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options
+        )
 
     def _import_franka_asset(self):
         self.franka_asset_file = (
@@ -1693,10 +1716,14 @@ class FurnitureSimEnv(gym.Env):
         asset_options.fix_base_link = True
         asset_options.disable_gravity = True
         asset_options.flip_visual_attachments = True
-        asset_file =  "franka_description_ros/franka_description/robots/franka_panda.urdf"
+        asset_file = (
+            "franka_description_ros/franka_description/robots/franka_panda.urdf"
+        )
         asset_options = AssetOptions()
-        return generate_builder_with_options(self.urdf_builder_generator, ASSET_ROOT, asset_file)
-    
+        return generate_builder_with_options(
+            self.urdf_builder_generator, ASSET_ROOT, asset_file
+        )
+
     def __del__(self):
         if not self.headless:
             self.isaac_gym.destroy_viewer(self.viewer)
@@ -2138,7 +2165,6 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         assert success, "Failed to set franka target"
 
     def _reset_part_poses(self, env_idxs: torch.Tensor):
-
         # Find the position we want to place the obstacle at here
         # We randomize the obstacle here because we want it fixed and don't apply forces to it later
         # Sample x and y values in [-2, 2] that we want to add to the initial position

@@ -24,8 +24,9 @@ def load_scene_config(scene: sapien.Scene, cfg: SimParams) -> None:
     # NOTE(Yuke): sapien doesn't support upaxis setting
 
     # NOTE(Yuke): sapien doesn't support substep settting
-    if cfg.use_gpu_pipeline:
-        sapien.physx.enable_gpu()
+    # This should be called before
+    # if cfg.use_gpu_pipeline:
+    #     sapien.physx.enable_gpu()
     scene_config.bounce_threshold = cfg.physx.bounce_threshold_velocity
 
     if cfg.physx.solver_type == 0:
