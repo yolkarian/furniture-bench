@@ -3,6 +3,7 @@ from furniture_bench.utils.sapien.urdf_loader import URDFLoader
 import numpy as np
 import os
 from pathlib import Path
+import scipy.spatial
 
 ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_tags")
 
@@ -14,8 +15,15 @@ def demo(fix_root_link, disable_gravity, balance_passive_force):
     scene.add_directional_light([0, 1, -1], [0.5, 0.5, 0.5])
 
     viewer = scene.create_viewer()
-    viewer.set_camera_xyz(x=-2, y=0, z=1)
-    viewer.set_camera_rpy(r=0, p=-0.3, y=0)
+    pose = sapien.Pose(p=[-2, 0, 1])
+    vec = np.array([0, 0, 0],dtype=np.float32) - pose.get_p()
+    vec = vec / np.linalg.norm(vec)
+    print(vec)
+    rot,_ = scipy.spatial.transform.Rotation.align_vectors([1, 0, 0], vec)
+    pose.set_rpy(rot.as_euler("xyz").astype(np.float32))
+    print(pose)
+    viewer.set_camera_pose(pose) # only this is valid
+
 
     # Load URDF
     loader = URDFLoader()

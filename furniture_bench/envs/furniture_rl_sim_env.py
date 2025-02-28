@@ -41,7 +41,7 @@ from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS, ROBOT_STATES
 from furniture_bench.furniture.parts.part import Part
 
 from ipdb import set_trace as bp
-from typing import Union, Tuple
+from typing import Union, Tuple, List
 
 from furniture_bench.sim_config_sapien import sim_config, AssetOptions
 from furniture_bench.utils.sapien.actor_builder import ActorBuilder
@@ -318,7 +318,7 @@ class FurnitureSimEnv(gym.Env):
         spacing = 1.0
         env_lower = np.array([-spacing, -spacing, 0.0], dtype=np.float32)
         env_upper = np.array([spacing, spacing, spacing], dtype=np.float32)
-        self.envs = []
+        self.envs:List[sapien.Scene] = []
         self.env_steps = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
 
         self.entities = {}
@@ -370,14 +370,20 @@ class FurnitureSimEnv(gym.Env):
         self.base_idxs = []
         self.part_idxs = defaultdict(list)
         self.franka_entities = []
+        self.franka_actor_idx_all = []
+        self.part_actor_idx_all = []  # global list of indices, when resetting all parts
+        self.part_actor_idx_by_env = {}
+        self.obstacle_actor_idxs_by_env = {}
+        self.bulb_actor_idxs_by_env = {}
                     
-        self.parts_entities = {} # entities of part in env 1
+        self.parts_entities = {} # entities of part in env 0
+        self.obstacle_entities = [] # entities of obstacles in env 0
         self._subscenes = []
         scene_grid_length = int(np.ceil(np.sqrt(self.num_envs)))
-        physx_system = sapien.physx.PhysxGpuSystem(
+        self.physx_system = sapien.physx.PhysxGpuSystem(
             device=sapien.Device(self.device.type)
         )  # cuda for the rendering
-
+        self.obstacle_handles = []
         for i in range(self.num_envs):
             scene_x, scene_y = (
                 i % scene_grid_length - scene_grid_length // 2,
@@ -385,12 +391,12 @@ class FurnitureSimEnv(gym.Env):
             )
             scene = sapien.Scene(
                 systems=[
-                    physx_system,
+                    self.physx_system,
                     sapien.render.RenderSystem(self.device.type),
                 ]  # cuda for the rendering
             )
             load_scene_config(scene, sim_config["sim_params"])
-            physx_system.set_scene_offset(
+            self.physx_system.set_scene_offset(
                 scene,
                 [
                     scene_x * spacing,
@@ -433,6 +439,7 @@ class FurnitureSimEnv(gym.Env):
 
             # Make the obstacle
             # TODO: Make config
+            self.obstacle_actor_idxs_by_env[i] = []
             for asset, pose, name in zip(
                 [
                     self.obstacle_front_asset,
@@ -449,15 +456,19 @@ class FurnitureSimEnv(gym.Env):
                 asset.set_scene(scene)
                 asset.set_initial_pose(pose)
                 obstacle_entity = asset.build(name)
+                if i == 0:
+                    self.obstacle_entities.append(obstacle_entity)
 
                 # NOTE(Yuke): different ID might be needed
-                self.part_idxs[name].append(obstacle_entity.global_id)
+                self.obstacle_actor_idxs_by_env[i].append(obstacle_entity.get_global_id())
+                self.part_idxs[name].append(obstacle_entity.get_global_id())
 
             # Add robot.
             self.franka_asset.set_scene(scene)
-            self.franka_asset.ind
             franka_entity = self.franka_asset.build()
             franka_entity.set_name(f"franka_{i}")
+            # TODO: whether it is actually the index we want
+            self.franka_actor_idx_all(franka_entity.get_gpu_index())
             self.franka_num_dofs = franka_entity.get_dof()
 
             # TODO(Yuke): force sensor
@@ -470,10 +481,7 @@ class FurnitureSimEnv(gym.Env):
             self.base_idxs.append(
                 franka_entity.find_link_by_name("k_ee_link").get_index()
             )
-            # Set dof properties.
-            franka_dof_props = self.isaac_gym.get_asset_dof_properties(
-                self.franka_asset
-            )
+            # Set dof properties (active joints)
             for i, joint in enumerate(franka_entity.active_joints):
                 if i < 7:
                     # NOTE(Yuke): use the internal PD controller to control
@@ -499,6 +507,8 @@ class FurnitureSimEnv(gym.Env):
 
             # Add furniture parts.
             poses = []
+            self.part_actor_idx_by_env[i] = []
+            self.bulb_actor_idxs_by_env[i] = []
 
             for part in self.furniture.parts:
                 pos, ori = self._get_reset_pose(part)
@@ -532,7 +542,10 @@ class FurnitureSimEnv(gym.Env):
                 part_idx = part_entitiy.get_global_id()
                 if i == 0:
                     self.entities[part.name] = part_entitiy
-                
+                if part.name == "lamp_bulb":
+                    self.bulb_actor_idxs_by_env[i].append(part_idx)
+                self.part_actor_idx_all.append(part_idx)
+                self.part_actor_idx_by_env[i].append(part_idx)
                 self.part_idxs[part.name].append(part_idx)
 
         # Make a tensor that contains the RB indices of all the furniture parts.
@@ -551,6 +564,7 @@ class FurnitureSimEnv(gym.Env):
                 dim=0,
             ).T
 
+
             self.hand_bulb_pos_thresh = torch.tensor(
                 [0.03, 0.03, 0.03], dtype=torch.float32, device=self.device
             )
@@ -561,46 +575,8 @@ class FurnitureSimEnv(gym.Env):
         ).unsqueeze(1)
 
         # This only needs to happen once
-        
-        for part in self.furniture.parts:
-            self.parts_entities[part.name] = scene.get
-
-        self.obstacle_handles = []
-        for name in ["obstacle_front", "obstacle_right", "obstacle_left"]:
-            self.obstacle_handles.append(
-                self.isaac_gym.find_actor_index(self.envs[0], name, gymapi.DOMAIN_ENV)
-            )
-
+        # This obstacle entities and part entities of env 0 have been added before
         # print(f'Getting the separate actor indices for the frankas and the furniture parts (not the handles)')
-        self.franka_actor_idx_all = []
-        self.part_actor_idx_all = []  # global list of indices, when resetting all parts
-        self.part_actor_idx_by_env = {}
-        self.obstacle_actor_idxs_by_env = {}
-        self.bulb_actor_idxs_by_env = {}
-        for env_idx in range(self.num_envs):
-            self.franka_actor_idx_all.append(
-                self.isaac_gym.find_actor_index(
-                    self.envs[env_idx], "franka", gymapi.DOMAIN_SIM
-                )
-            )
-            self.part_actor_idx_by_env[env_idx] = []
-            self.bulb_actor_idxs_by_env[env_idx] = []
-            for part in self.furnitures[env_idx].parts:
-                part_actor_idx = self.isaac_gym.find_actor_index(
-                    self.envs[env_idx], part.name, gymapi.DOMAIN_SIM
-                )
-                self.part_actor_idx_all.append(part_actor_idx)
-                self.part_actor_idx_by_env[env_idx].append(part_actor_idx)
-
-                if part.name == "lamp_bulb":
-                    self.bulb_actor_idxs_by_env[env_idx].append(part_actor_idx)
-
-            self.obstacle_actor_idxs_by_env[env_idx] = []
-            for name in ["obstacle_front", "obstacle_right", "obstacle_left"]:
-                part_actor_idx = self.isaac_gym.find_actor_index(
-                    self.envs[env_idx], name, gymapi.DOMAIN_SIM
-                )
-                self.obstacle_actor_idxs_by_env[env_idx].append(part_actor_idx)
 
         self.franka_actor_idxs_all_t = torch.tensor(
             self.franka_actor_idx_all, device=self.device, dtype=torch.int32
