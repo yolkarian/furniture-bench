@@ -24,15 +24,15 @@ def _try_very_hard_to_find_file(filename:str, urdf_dir:str, package_dir:Optional
         filename = filename[10:]
         if package_dir is not None:
             fpath = package_dir / filename
-
-        parent_dir = urdf_dir
-        while True:
-            fpath = parent_dir / filename
-            if fpath.is_file():
-                break
-            if parent_dir == Path("/"):
-                break
-            parent_dir = parent_dir.parent
+        else:
+            parent_dir = urdf_dir
+            while True:
+                fpath = parent_dir / filename
+                if fpath.is_file():
+                    break
+                if parent_dir == Path("/"):
+                    break
+                parent_dir = parent_dir.parent
     else:
         fpath = urdf_dir / filename
 

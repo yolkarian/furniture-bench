@@ -102,9 +102,6 @@ class ActorBuilder:
         self.disable_gravity: bool = False
         self.linear_damping: float = 0.0
         self.angular_damping: float = 0.0
-    
-
-
         self.initial_pose = sapien.Pose()
 
     def set_initial_pose(self, pose):
@@ -176,7 +173,7 @@ class ActorBuilder:
             component = sapien.physx.PhysxRigidDynamicComponent()
             component.set_linear_damping(self.linear_damping)
             component.set_angular_damping(self.angular_damping)
-            component.set_disable_gravity(r.disable_gravity)
+            component.set_disable_gravity(self.disable_gravity)
         elif self.physx_body_type == "kinematic":
             component = sapien.physx.PhysxRigidDynamicComponent()
             component.set_linear_damping(self.linear_damping)
@@ -295,7 +292,7 @@ class ActorBuilder:
 
         entity = self.build_entity()
         entity.name = self.name
-        entity.pose = self.initial_pose  # set pose before adding to scene
+        entity.set_pose(self.initial_pose) # set pose before adding to scene
         self.scene.add_entity(entity)
         return entity
 

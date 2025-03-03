@@ -49,7 +49,7 @@ from furniture_bench.utils.sapien.actor_builder import ActorBuilder
 from furniture_bench.utils.sapien.articulation_builder import ArticulationBuilder
 
 
-ASSET_ROOT = str(Path(__file__).parent.parent.absolute() /"furniture_bench"/ "assets_no_tags")
+ASSET_ROOT = str(Path(__file__).parent.parent.absolute() /"furniture_bench"/ "assets_no_tags" )
 
 class FurnitureSimImport:
     """FurnitureSim base class."""
@@ -64,7 +64,6 @@ class FurnitureSimImport:
         high_random_idx: int = 0,
         max_env_steps: int = 3000,
         headless: bool = False,
-        ee_laser: bool = False,
         parts_poses_in_robot_frame=False,
     ):
         """
@@ -90,7 +89,6 @@ class FurnitureSimImport:
             act_rot_repr (str): Representation of rotation for action space. Options are 'quat', 'axis', or 'rot_6d'.
             ctrl_mode (str): 'diffik' (joint impedance, with differential inverse kinematics control)
         """
-        super(FurnitureSimEnv, self).__init__()
         self.device = torch.device("cuda")
 
         self.assemble_idx = 0
@@ -112,6 +110,8 @@ class FurnitureSimImport:
         self.num_envs = num_envs
         self.pose_dim = 7
         self.headless = headless
+        self.stiffness = 1000.0
+        self.damping =  200.0
 
 
         self.move_neutral = False
@@ -127,8 +127,6 @@ class FurnitureSimImport:
         self.grasp_margin = 0.02 - 0.001  # To prevent repeating open and close actions.
         self.max_gripper_width = config["robot"]["max_gripper_width"][furniture]
 
-
-        print(f"Observation keys: {self.obs_keys}")
 
         if "factory" in self.furniture_name:
             # Adjust simulation parameters
@@ -159,7 +157,14 @@ class FurnitureSimImport:
         self.create_subscenes()
 
         self._setup_lights()
+        self._setup_sim()
         self.set_viewer()
+
+        self._gpu_apply_all()
+        self.physx_system.gpu_update_articulation_kinematics()
+        self._gpu_fetch_all()
+
+
         # self.set_camera()
     def set_viewer(self):
         """Create the viewer."""
@@ -167,7 +172,7 @@ class FurnitureSimImport:
 
         if not self.headless:
             self.viewer = Viewer()
-            self.viewer.set_scene(self.envs[0])
+            self.viewer.set_scene(self.subscenes[0])
 
             control_window = self.viewer.control_window
             control_window.show_joint_axes = False
@@ -181,15 +186,14 @@ class FurnitureSimImport:
             vec = np.array([-1, 0, 0.62],dtype=np.float32) - pose.get_p()
             vec = vec / np.linalg.norm(vec)
             rot,_ = scipy.spatial.transform.Rotation.align_vectors(vec, [1, 0, 0])
+            if vec[0] < 0:
+                quat = np.zeros(4, dtype = np.float32)
+                quat[:3] = vec
+                rot =  rot * scipy.spatial.transform.Rotation.from_quat(quat) 
+
             pose.set_rpy(rot.as_euler("xyz").astype(np.float32))
             self.viewer.set_camera_pose(pose)
-            # Other API also works, it redefined in control window
-            # cam_pos = gymapi.Vec3(0.97, 0, 0.74)
-            # cam_target = gymapi.Vec3(-1, 0, 0.62)
-            # middle_env = self.envs[0]
-            # self.isaac_gym.viewer_camera_look_at(
-            #     self.viewer, middle_env, cam_pos, cam_target
-            # )
+            # set_camera_rpy() API also works, it redefined in control window
 
 
     def import_assets(self):
@@ -212,7 +216,7 @@ class FurnitureSimImport:
         self._ground_builder = sapien.ActorBuilder()
         self._ground_builder.set_physx_body_type("static")
         self._ground_builder.add_plane_collision(
-            sapien.Pose(p=[0, 0, 0]), q=[0.7071068, 0, -0.7071068, 0]
+            sapien.Pose(p=[0, 0, 0], q=[0.7071068, 0, -0.7071068, 0])
         )
         self._ground_builder.set_initial_pose(sapien.Pose(p=[0, 0, 0]))
         if enable_render:
@@ -226,8 +230,21 @@ class FurnitureSimImport:
 
     def _setup_lights(self):
         for light in sim_config["lights"]:
-            self.sapien_scene.add_directional_light(light["direction"], light["color"])
-            self.sapien_scene.set_ambient_light(light["ambient"])
+            for scene in self.subscenes:
+                scene.set_ambient_light(light["ambient"])
+            # NOTE(Yuke): for rendering in a single scenario
+            scene = self.subscenes[0]
+            entity = sapien.Entity()
+            entity.name = "directional_light"
+            direct_light = sapien.render.RenderDirectionalLightComponent()    
+            entity.add_component(direct_light)
+            direct_light.set_color(light["color"])
+            light_position = self.scene_offsets_np[0]
+            direct_light.set_entity_pose(sapien.Pose(
+                light_position, sapien.math.shortest_rotation([1, 0, 0], light["direction"])
+            ))
+            
+            scene.add_entity(entity)
 
     @property
     def n_parts_assemble(self):
@@ -259,7 +276,7 @@ class FurnitureSimImport:
         spacing = 1.0
         env_lower = np.array([-spacing, -spacing, 0.0], dtype=np.float32)
         env_upper = np.array([spacing, spacing, spacing], dtype=np.float32)
-        self.envs:List[sapien.Scene] = []
+        
         self.env_steps = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
 
         self.entities = {}
@@ -297,7 +314,7 @@ class FurnitureSimImport:
         )
         self.obstacle_right_pose.q = self.obstacle_front_pose.q
 
-        self.obstacle_left_pose = sapien.Pose
+        self.obstacle_left_pose = sapien.Pose()
         self.obstacle_left_pose.p = np.array(
             [
                 self.obstacle_front_pose.p[0] - 0.075,
@@ -319,7 +336,8 @@ class FurnitureSimImport:
                     
         self.parts_entities = {} # entities of part in env 0
         self.obstacle_entities = [] # entities of obstacles in env 0
-        self._subscenes = []
+        self.subscenes: List[sapien.Scene] = []
+        self.scene_offsets_np:List[np.ndarray] = []
         scene_grid_length = int(np.ceil(np.sqrt(self.num_envs)))
         self.physx_system = sapien.physx.PhysxGpuSystem(
             device=sapien.Device(self.device.type)
@@ -337,6 +355,11 @@ class FurnitureSimImport:
                 ]  # cuda for the rendering
             )
             load_scene_config(scene, sim_config["sim_params"])
+            self.scene_offsets_np.append(np.array(                [
+                    scene_x * spacing,
+                    scene_y * spacing,
+                    0,
+                ],dtype=np.float32))
             self.physx_system.set_scene_offset(
                 scene,
                 [
@@ -345,11 +368,11 @@ class FurnitureSimImport:
                     0,
                 ],
             )
-            self._subscenes.append(scene)
+            self.subscenes.append(scene)
 
             # Add workspace (table).
             table_pose = sapien.Pose()
-            table_pose.p = np.array([0.0, 0.0, table_pos[2]], dtype=np.float32)
+            table_pose.set_p(np.array([0.0, 0.0, table_pos[2]], dtype=np.float32))
 
             self.table_asset.set_scene(scene)
             table_entity = self.table_asset.build(f"table_{i}")
@@ -409,7 +432,7 @@ class FurnitureSimImport:
             franka_entity = self.franka_asset.build()
             franka_entity.set_name(f"franka_{i}")
             # TODO: whether it is actually the index we want
-            self.franka_actor_idx_all(franka_entity.get_gpu_index())
+            self.franka_actor_idx_all.append(franka_entity.get_gpu_index())
             self.franka_num_dofs = franka_entity.get_dof()
 
             # TODO(Yuke): force sensor
@@ -444,7 +467,6 @@ class FurnitureSimImport:
                 config["robot"]["reset_joints"], dtype=np.float32
             )
             self.default_dof_pos[7:] = self.max_gripper_width / 2
-            franka_entity.set_qpos(self.default_dof_pos[:,])
 
             # Add furniture parts.
             poses = []
@@ -596,7 +618,111 @@ class FurnitureSimImport:
         asset_file = (
             "franka_description_ros/franka_description/robots/franka_panda.urdf"
         )
-        asset_options = AssetOptions()
         return generate_builder_with_options(
-            self.urdf_builder_generator, ASSET_ROOT, asset_file
+            self.urdf_builder_generator, ASSET_ROOT, asset_file, asset_options
         )
+    
+    def _setup_sim(self):
+        self.physx_system.gpu_init()
+        for franka_entity in self.franka_entities:
+            franka_entity.set_qpos(self.default_dof_pos[:,].copy())
+        self.physx_system.gpu_apply_rigid_dynamic_data()
+        self.physx_system.gpu_apply_articulation_root_pose()
+        self.physx_system.gpu_apply_articulation_root_velocity()
+        self.physx_system.gpu_apply_articulation_qvel()
+        self._gpu_sim_initialized = True
+        self.physx_system.gpu_update_articulation_kinematics()
+
+    def _gpu_fetch_all(self):
+        
+        self.physx_system.gpu_fetch_rigid_dynamic_data()   
+        self.physx_system.gpu_fetch_articulation_link_pose()
+        self.physx_system.gpu_fetch_articulation_link_velocity()
+        self.physx_system.gpu_fetch_articulation_qpos()
+        self.physx_system.gpu_fetch_articulation_qvel()
+        self.physx_system.gpu_fetch_articulation_qacc()
+        self.physx_system.gpu_fetch_articulation_target_qpos()
+        self.physx_system.gpu_fetch_articulation_target_qvel()
+
+
+    def _gpu_apply_all(self):
+        self.physx_system.gpu_apply_rigid_dynamic_data()
+        self.physx_system.gpu_apply_articulation_qpos()
+        self.physx_system.gpu_apply_articulation_qvel()
+        self.physx_system.gpu_apply_articulation_qf()
+        self.physx_system.gpu_apply_articulation_root_pose()
+        self.physx_system.gpu_apply_articulation_root_velocity()
+        self.physx_system.gpu_apply_articulation_target_position()
+        self.physx_system.gpu_apply_articulation_target_velocity()
+    def update_render(
+        self
+    ):
+        # note that this design is such that no GPU memory is allocated for memory unless requested for, which can occur
+        # after the e.g. physx GPU simulation is initialized.
+        self.physx_system.sync_poses_gpu_to_cpu()
+        self.subscenes[0].update_render()
+
+    def _get_reset_pose(self, part: Part):
+        """Get the reset pose of the part.
+
+        Args:
+            part: The part to get the reset pose.
+        """
+        if self.init_assembled:
+            if part.name == "chair_seat":
+                # Special case handling for chair seat since the assembly of chair back is not available from initialized pose.
+                part.reset_pos = [[0, 0.16, -0.035]]
+                part.reset_ori = [rot_mat([np.pi, 0, 0], hom=True)]
+            attached_part = False
+            attach_to = None
+            for assemble_pair in self.furniture.should_be_assembled:
+                if part.part_idx == assemble_pair[1]:
+                    attached_part = True
+                    attach_to = self.furniture.parts[assemble_pair[0]]
+                    break
+            if attached_part:
+                attach_part_pos = self.furniture.parts[attach_to.part_idx].reset_pos[0]
+                attach_part_ori = self.furniture.parts[attach_to.part_idx].reset_ori[0]
+                attach_part_pose = get_mat(attach_part_pos, attach_part_ori)
+                if part.default_assembled_pose is not None:
+                    pose = attach_part_pose @ part.default_assembled_pose
+                    pos = pose[:3, 3]
+                    ori = T.to_hom_ori(pose[:3, :3])
+                else:
+                    pos = (
+                        attach_part_pose
+                        @ self.furniture.assembled_rel_poses[
+                            (attach_to.part_idx, part.part_idx)
+                        ][0][:4, 3]
+                    )
+                    pos = pos[:3]
+                    ori = (
+                        attach_part_pose
+                        @ self.furniture.assembled_rel_poses[
+                            (attach_to.part_idx, part.part_idx)
+                        ][0]
+                    )
+                part.reset_pos[0] = pos
+                part.reset_ori[0] = ori
+            pos = part.reset_pos[self.from_skill]
+            ori = part.reset_ori[self.from_skill]
+        else:
+            pos = part.reset_pos[self.from_skill]
+            ori = part.reset_ori[self.from_skill]
+        return pos, ori
+    def april_coord_to_sim_coord(self, april_coord_mat):
+        """Converts AprilTag coordinate to simulator base_tag coordinate."""
+        return self.april_to_sim_mat @ april_coord_mat
+    @property
+    def april_to_sim_mat(self):
+        return self.franka_from_origin_mat @ self.base_tag_from_robot_mat
+
+if __name__=="__main__":
+    sim = FurnitureSimImport("lamp")
+
+    while not sim.viewer.closed:
+        for _ in range(4):  # render every 4 steps
+            sim.physx_system.step()
+        sim.physx_system.sync_poses_gpu_to_cpu()
+        sim.update_render()
+        sim.viewer.render()   
