@@ -55,6 +55,7 @@ from furniture_bench.utils.sapien.actor_builder import ActorBuilder
 from furniture_bench.utils.sapien.articulation_builder import ArticulationBuilder
 
 ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_tags")
+# ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets")
 
 
 # TODO:
@@ -69,14 +70,14 @@ class FurnitureEnv:
         furniture_name: str,
         num_envs: int = 1,
         headless: bool = False,
-        parallel_in_single_scene: bool = True,
+        parallel_in_single_scene: bool = False,
     ):
         self.furniture_name = furniture_name
         self.num_envs = num_envs
         
         self.headless = headless
         self.parallel_in_single_scene = parallel_in_single_scene
-        assert self.parallel_in_single_scene
+        # assert self.parallel_in_single_scene
 
         # Predefined parameters
         self.device = torch.device("cuda")
@@ -97,7 +98,7 @@ class FurnitureEnv:
             self.furniture = furniture_factory(self.furniture_name)
 
         self.from_skill = 0 # TODO: to investigate the role of this parameter
-        self.scene_spacing = 1.0
+        self.scene_spacing = 3.0
         if "factory" in self.furniture_name:
             # Adjust simulation parameters
             sim_config["sim_params"].dt = 1.0 / 120.0
@@ -249,20 +250,67 @@ class FurnitureEnv:
                     scene_offset,
                 )    
 
+            self.ground_builder.set_scene(scene)
+            # Set collision group to avoid collision between different scene
+            self.ground_builder.collision_groups[3] &= 0xffff
+            self.ground_builder.collision_groups[3] |= i << 16
+            if self.parallel_in_single_scene:
+                tmp_name = self.ground_builder.name
+                tmp_initial_p = self.ground_builder.initial_pose.p.copy()
+                self.ground_builder.set_name(f"scene_{i}_{tmp_name}")
+                self.ground_builder.initial_pose.set_p(scene_offset + tmp_initial_p)
+
+            self.ground_builder.build()
+            if self.parallel_in_single_scene:
+                self.ground_builder.set_name(tmp_name)
+                self.ground_builder.initial_pose.set_p(tmp_initial_p)
+
             for key, value in self.static_obj_builders.items():
                 value.set_scene(scene)
-                value.build()
-            self.ground_builder.set_scene(scene)
-            self.ground_builder.build()
+                value.collision_groups[3] &= 0xffff
+                value.collision_groups[3] |= i << 16
+                if self.parallel_in_single_scene:
+                    tmp_name = value.name
+                    tmp_initial_p = value.initial_pose.p.copy()
+                    value.set_name(f"scene_{i}_{tmp_name}")
+                    value.initial_pose.set_p(scene_offset + tmp_initial_p)
+                obj_entity = value.build()
+                self.static_obj_entites[key].append(obj_entity)
+                if self.parallel_in_single_scene:
+                    value.set_name(tmp_name)
+                    value.initial_pose.set_p(tmp_initial_p)
+
 
             for key, value in self.part_builders.items():
                 value.set_scene(scene)
+                value.collision_groups[3] &= 0xffff
+                value.collision_groups[3] |= i << 16
+                if self.parallel_in_single_scene:
+                    tmp_name = value.name
+                    tmp_initial_p = value.initial_pose.p.copy()
+                    value.set_name(f"scene_{i}_{tmp_name}")
+                    value.initial_pose.set_p(scene_offset + tmp_initial_p)
                 part_entity = value.build()
                 self.part_entities[key].append(part_entity)
+                if self.parallel_in_single_scene:
+                    value.set_name(tmp_name)
+                    value.initial_pose.set_p(tmp_initial_p)
 
             self.frank_builder.set_scene(scene)
+            if self.parallel_in_single_scene:
+                tmp_initial_p = self.frank_builder.initial_pose.p.copy()
+                self.frank_builder.initial_pose.set_p(scene_offset + self.frank_builder.initial_pose.get_p())
+            for link_builder in self.frank_builder.link_builders:
+                link_builder.collision_groups[3] &= 0xffff
+                link_builder.collision_groups[3] |= i << 16
+                # links without one articulation haven't been changed in this case
             franka_entity = self.frank_builder.build() # Actually, this object is not Entity
-            franka_entity.set_name("franka")
+            if self.parallel_in_single_scene:
+                franka_entity.set_name("scene_{i}_franka")
+                self.frank_builder.initial_pose.set_p(tmp_initial_p)
+            else:
+                franka_entity.set_name("franka")
+            
             if i == 0:
                 self.franka_num_dof = franka_entity.get_dof()
                 self.franka_default_dof_pos = np.zeros(self.franka_num_dof, dtype=np.float32)
@@ -379,7 +427,7 @@ class FurnitureEnv:
             )
             part_builder.set_name(part.name)
             self.part_builders[part.name] = part_builder
-            pos, ori = self._get_reset_pose(part)
+            pos, ori = self._get_reset_pose_part(part)
             part_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
             part_pose = sapien.Pose()
             part_pose.set_p(
@@ -439,7 +487,7 @@ class FurnitureEnv:
         pose.set_rpy(rot.as_euler("xyz").astype(np.float32))
         self.viewer.set_camera_pose(pose)
 
-    def _get_reset_pose(self, part: Part):
+    def _get_reset_pose_part(self, part: Part):
         """Get the reset pose of the part.
 
         Args:
@@ -453,12 +501,17 @@ class FurnitureEnv:
     def init_sim(self):
         self.physx_system.gpu_init()
         # NOTE(Yuke): Setting the initial qpos must be complete after gpu_init
-        self.physx_system.cuda_articulation_qpos.torch()[self.franka_entities[0].get_gpu_index(), :self.franka_num_dof] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
-        self.physx_system.gpu_apply_articulation_qpos()
+        self.reset_franka_qpos()
         if self.parallel_in_single_scene:
             pass
             # self.render_system_group = sapien.render.RenderSystemGroup([ s.render_system for s in self.scenes])
         
+    def reset_franka_qpos(self):
+        frank_entities_gpu_index = torch.tensor([frank_entity.get_gpu_index() for frank_entity in self.franka_entities],dtype=torch.int32, device=self.device)
+
+        self.physx_system.cuda_articulation_qpos.torch()[frank_entities_gpu_index, :self.franka_num_dof] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
+        self.physx_system.gpu_apply_articulation_qpos()    
+    
     def april_coord_to_sim_coord(self, april_coord_mat):
         """Converts AprilTag coordinate to simulator base_tag coordinate."""
         return self.april_to_sim_mat @ april_coord_mat
@@ -469,7 +522,7 @@ class FurnitureEnv:
 
 
 if __name__=="__main__":
-    sim = FurnitureEnv(furniture_name="lamp", num_envs=1)
+    sim = FurnitureEnv(furniture_name="lamp", num_envs=4, parallel_in_single_scene=False)
     sim.init_sim()
 
     while not sim.viewer.closed:
