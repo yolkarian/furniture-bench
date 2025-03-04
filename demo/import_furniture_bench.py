@@ -59,10 +59,12 @@ ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_t
 
 
 # TODO:
-#      1. Add Collision Group
-#      2. Add Extra Support in one Scene Rendering
-#      3. Action Input and output
-#      4. Shader
+#      1. Action Input and output
+#      2. Shader
+
+# NOTE(Yuke): 
+# 1. Currently no such shared collision shapes which can collide with elements in all Scenes.
+# 2. Some actors do not contain collision mesh.
 
 class FurnitureEnv:
     def __init__(
@@ -180,9 +182,6 @@ class FurnitureEnv:
         self._create_ground_builder()
         self._create_franka_builder()
         self._create_part_builders()
-
-        # TODO: add obstacle builder 
-
 
 
         #%% Create Scenes
@@ -306,7 +305,7 @@ class FurnitureEnv:
                 # links without one articulation haven't been changed in this case
             franka_entity = self.frank_builder.build() # Actually, this object is not Entity
             if self.parallel_in_single_scene:
-                franka_entity.set_name("scene_{i}_franka")
+                franka_entity.set_name(f"scene_{i}_franka")
                 self.frank_builder.initial_pose.set_p(tmp_initial_p)
             else:
                 franka_entity.set_name("franka")
@@ -324,6 +323,11 @@ class FurnitureEnv:
             # The setting of initial qpos must be conducted after the initialization of GPU physx_system.gpu_init()
             # franka_entity.set_qpos(self.franka_default_dof_pos)
             self.franka_entities.append(franka_entity)
+            for i, joint in enumerate(franka_entity.active_joints):
+                if i < 7:
+                    joint.set_drive_properties(stiffness=self.stiffness, damping=self.damping)
+                else:
+                    joint.set_drive_properties(stiffness=self.stiffness, damping=0)
 
             # For testing of the shape of Tensor
             # Automatically construct a tensor which contains q of all entities with the 
@@ -499,18 +503,30 @@ class FurnitureEnv:
 
 
     def init_sim(self):
-        self.physx_system.gpu_init()
+        # torch seed can be added before
+        self.physx_system.gpu_init() 
+
         # NOTE(Yuke): Setting the initial qpos must be complete after gpu_init
+        #   and according to my understanding we should fetch first. Otherwise, the values stored
+        #   in the buffer are undefined
+        self.physx_system.gpu_fetch_rigid_dynamic_data()
+        self.physx_system.gpu_fetch_articulation_link_pose()
+        self.physx_system.cuda_rigid_body_data.torch()[:, 7:] = torch.zeros_like(self.physx_system.cuda_rigid_body_data.torch()[:, 7:])
         self.reset_franka_qpos()
+
+        self.physx_system.gpu_apply_rigid_dynamic_data()
+        self.physx_system.gpu_apply_articulation_root_pose()
+        self.physx_system.gpu_apply_articulation_root_velocity()
+        self.physx_system.gpu_apply_articulation_qpos()  
+        self.physx_system.gpu_apply_articulation_qvel()
         if self.parallel_in_single_scene:
             pass
             # self.render_system_group = sapien.render.RenderSystemGroup([ s.render_system for s in self.scenes])
         
     def reset_franka_qpos(self):
         frank_entities_gpu_index = torch.tensor([frank_entity.get_gpu_index() for frank_entity in self.franka_entities],dtype=torch.int32, device=self.device)
-
         self.physx_system.cuda_articulation_qpos.torch()[frank_entities_gpu_index, :self.franka_num_dof] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
-        self.physx_system.gpu_apply_articulation_qpos()    
+        self.physx_system.cuda_articulation_qvel.torch()[:, :] = torch.zeros_like(self.physx_system.cuda_articulation_qvel.torch())
     
     def april_coord_to_sim_coord(self, april_coord_mat):
         """Converts AprilTag coordinate to simulator base_tag coordinate."""
@@ -522,11 +538,26 @@ class FurnitureEnv:
 
 
 if __name__=="__main__":
-    sim = FurnitureEnv(furniture_name="lamp", num_envs=4, parallel_in_single_scene=False)
+    sim = FurnitureEnv(furniture_name="lamp", num_envs=4, parallel_in_single_scene=True)
     sim.init_sim()
+
+    # TODO: Currently please only use lamp for the simulation, since to use other furnitures
+    #   file path change in the urdf file should be made.
+    action = sim.franka_default_dof_pos[None,:].repeat(sim.num_envs,axis = 0)
 
     while not sim.viewer.closed:
         sim.physx_system.step()
         sim.physx_system.sync_poses_gpu_to_cpu()
         sim.scenes[0].update_render()
         sim.viewer.render()
+        # Random Policy
+        noise = np.random.rand(*action.shape)  - 0.5
+        noise[:, -2] = 0
+        action_np = action + 0.02 * noise
+
+        action_torch = torch.from_numpy(action_np).to(sim.device, dtype=torch.float32)
+        
+        sim.physx_system.cuda_articulation_target_qpos.torch()[:, :] = action_torch[:, :]
+        # sim.physx_system.cuda_articulation_target_qvel.torch()[:, :] = torch.zeros_like(sim.physx_system.cuda_articulation_target_qvel.torch()).to(sim.device)
+        sim.physx_system.gpu_apply_articulation_target_position()
+        # sim.physx_system.gpu_apply_articulation_target_velocity()
