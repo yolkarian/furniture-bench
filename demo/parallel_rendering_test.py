@@ -11,7 +11,7 @@ env = gym.make(
     sim_backend="gpu",
     render_backend="gpu",
     num_envs=16,
-    parallel_in_single_scene=True,
+    parallel_in_single_scene=False,
     viewer_camera_configs=dict(shader_pack="rt-fast"),
 )
 env.reset()

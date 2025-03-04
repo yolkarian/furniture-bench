@@ -43,7 +43,7 @@ from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS, ROBOT_STATES
 from furniture_bench.furniture.parts.part import Part
 
 from ipdb import set_trace as bp
-from typing import Union, Tuple, List
+from typing import Union, Tuple, List, Optional
 
 from furniture_bench.sim_config_sapien import (
     sim_config,
@@ -56,6 +56,12 @@ from furniture_bench.utils.sapien.articulation_builder import ArticulationBuilde
 
 ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_tags")
 
+
+# TODO:
+#      1. Add Collision Group
+#      2. Add Extra Support in one Scene Rendering
+#      3. Action Input and output
+#      4. Shader
 
 class FurnitureEnv:
     def __init__(
@@ -78,11 +84,19 @@ class FurnitureEnv:
         self.pose_dim = 7
         self.stiffness = 1000.00
         self.damping = 200.0
+        self.restitution = 0.5
         self.last_grasp = torch.tensor([-1.0] * num_envs, device=self.device)
         self.grasp_margin = 0.02 - 0.001  # To prevent repeating open and close actions.
         self.max_gripper_width = config["robot"]["max_gripper_width"][
             self.furniture_name
         ]
+        self.furnitures = [furniture_factory(self.furniture_name) for _ in range(num_envs)]
+        if self.num_envs == 1:
+            self.furniture = self.furnitures[0]
+        else:
+            self.furniture = furniture_factory(self.furniture_name)
+
+        self.from_skill = 0 # TODO: to investigate the role of this parameter
         self.scene_spacing = 1.0
         if "factory" in self.furniture_name:
             # Adjust simulation parameters
@@ -97,16 +111,16 @@ class FurnitureEnv:
         # Predefined params to load objs, actors and articulations
         self.static_obj_dict: Dict[str, str] = {
             "base_tag": "furniture/urdf/base_tag.urdf",
-            # "obstacle": "furniture/urdf/obstacle.urdf",
+            "obstacle_left": "furniture/urdf/obstacle_side.urdf",
+            "obstacle_right": "furniture/urdf/obstacle_side.urdf",
             "background": "furniture/urdf/background.urdf",
             "obstacle_front": "furniture/urdf/obstacle_front.urdf",
-            "obstacle_side": "furniture/urdf/obstacle_side.urdf",
             "table": "furniture/urdf/table.urdf",
         }
         self.table_pos = np.array([0.8, 0.8, 0.4], dtype=np.float32)
 
         table_half_width = 0.015
-        table_surface_z = self.table_pos[2] + table_half_width
+        table_surface_z:float = self.table_pos[2] + table_half_width
         self.franka_pose = sapien.Pose(
             p=[0.5 * -self.table_pos[0] + 0.1, 0, table_surface_z + ROBOT_HEIGHT],
         )
@@ -130,14 +144,7 @@ class FurnitureEnv:
             [self.base_tag_pose.p[0] + 0.37 + 0.01, 0.0, table_surface_z + 0.015],
             dtype=np.float32,
         )
-        self.obstacle_front_pose.q = (
-            scipy.spatial.transform.Rotation.from_rotvec(
-                np.array([0, 0, 1]) * 0.5 * np.pi
-            )
-            .as_quat()
-            .astype(np.float32)
-        )
-
+        self.obstacle_front_pose.set_rpy([0, 0, 0.5 * np.pi])
         self.obstacle_right_pose = sapien.Pose()
         self.obstacle_right_pose.p = np.array(
             [
@@ -164,12 +171,14 @@ class FurnitureEnv:
         sapien.physx.enable_gpu()
         self.physx_system = sapien.physx.PhysxGpuSystem(self.sapien_device)
         self.urdf_loader = URDFLoader()  # just used to generate builder
+        self.render_system_group:Optional[sapien.render.RenderSystemGroup] = None
 
         # %% Create builder
 
         self._create_static_obj_builders()
         self._create_ground_builder()
         self._create_franka_builder()
+        self._create_part_builders()
 
         # TODO: add obstacle builder 
 
@@ -197,46 +206,63 @@ class FurnitureEnv:
         )
 
         # Some info to store
-        self.franka_entities = []
+        self.franka_entities:List[sapien.physx.PhysxArticulation] = []
         self.static_obj_entites:Dict[str, List[sapien.Entity]] = {}
+        self.part_entities:Dict[str, List[sapien.Entity]] = {}
         for key in self.static_obj_dict.keys():
             self.static_obj_entites[key] = []
+        for part in self.furniture.parts:
+            self.part_entities[part.name] = []
         self.part_actors:Dict[str, List[sapien.Entity]] = {}
         self.scene_offsets_np:List[np.ndarray] = []
         scene_grid_length = int(np.ceil(np.sqrt(self.num_envs)))
-        
+
+        if parallel_in_single_scene:
+            self.scenes.append(sapien.Scene(
+                    systems=[
+                        self.physx_system,
+                        sapien.render.RenderSystem(self.sapien_device),
+                    ]  # cuda also for the rendering
+            ))
         for i in range(self.num_envs):
             scene_x, scene_y = (
                 i % scene_grid_length - scene_grid_length // 2,
                 i // scene_grid_length - scene_grid_length // 2,
             )
-            scene = sapien.Scene(
-                systems=[
-                    self.physx_system,
-                    sapien.render.RenderSystem(self.sapien_device),
-                ]  # cuda also for the rendering
-            )
-            
             scene_offset = np.array(                [
                     scene_x * self.scene_spacing,
                     scene_y * self.scene_spacing,
                     0,
                 ],dtype=np.float32)
             self.scene_offsets_np.append(scene_offset)
-            self.physx_system.set_scene_offset(
-                scene,
-                scene_offset,
-            )
+            if parallel_in_single_scene:
+                scene = self.scenes[0]
+            else:
+                scene = sapien.Scene(
+                    systems=[
+                        self.physx_system,
+                        sapien.render.RenderSystem(self.sapien_device),
+                    ]  # cuda also for the rendering
+                )
+                self.physx_system.set_scene_offset(
+                    scene,
+                    scene_offset,
+                )    
 
             for key, value in self.static_obj_builders.items():
-                if key.startswith("obstacle"):
-                    continue
                 value.set_scene(scene)
                 value.build()
             self.ground_builder.set_scene(scene)
             self.ground_builder.build()
+
+            for key, value in self.part_builders.items():
+                value.set_scene(scene)
+                part_entity = value.build()
+                self.part_entities[key].append(part_entity)
+
             self.frank_builder.set_scene(scene)
-            franka_entity = self.frank_builder.build()
+            franka_entity = self.frank_builder.build() # Actually, this object is not Entity
+            franka_entity.set_name("franka")
             if i == 0:
                 self.franka_num_dof = franka_entity.get_dof()
                 self.franka_default_dof_pos = np.zeros(self.franka_num_dof, dtype=np.float32)
@@ -244,6 +270,7 @@ class FurnitureEnv:
                     config["robot"]["reset_joints"], dtype=np.float32
                 )
                 self.franka_default_dof_pos[7:] = self.max_gripper_width / 2
+                
             # NOTE(Yuke): Refer to mani_skill utils structs articulations.py Articulation qpos
             # Direct setting with entity object is impossible for GPU Simulator
             # The setting of initial qpos must be conducted after the initialization of GPU physx_system.gpu_init()
@@ -263,7 +290,8 @@ class FurnitureEnv:
             # self.franka_entities.append(franka_entity)
 
             self.scenes.append(scene)
-            
+
+        
         # TODO: add entities into the list
 
         self._add_light()
@@ -285,7 +313,7 @@ class FurnitureEnv:
             sapien.Pose(p=[0, 0, self.table_pos[2]])
         )
         for collision_record in self.static_obj_builders["table"].collision_records:
-            mt = sapien.physx.PhysxMaterial(sim_config["table"]["friction"], sim_config["table"]["friction"], 0.5)
+            mt = sapien.physx.PhysxMaterial(sim_config["table"]["friction"], sim_config["table"]["friction"], self.restitution)
             collision_record.material = mt
         self.static_obj_builders["base_tag"].set_initial_pose(
             self.base_tag_pose
@@ -293,8 +321,18 @@ class FurnitureEnv:
         self.static_obj_builders["background"].set_initial_pose(
             sapien.Pose(p =[-0.8, 0, 0.75])
         )
+        self.static_obj_builders["obstacle_front"].set_initial_pose(
+            self.obstacle_front_pose
+        )
+        self.static_obj_builders["obstacle_left"].set_initial_pose(
+             self.obstacle_left_pose
+        )
+        self.static_obj_builders["obstacle_right"].set_initial_pose(
+            self.obstacle_right_pose
+        )
 
     def _create_ground_builder(self):
+        # Do we need to create a ground for each scene ? ()
         self.ground_builder = sapien.ActorBuilder()
         self.ground_builder.set_name("ground")
         self.ground_builder.set_physx_body_type("static")
@@ -330,8 +368,32 @@ class FurnitureEnv:
             else:
                 link_builder.joint_record.friction = sim_config["robot"]["arm_frictions"]
         self.frank_builder.set_initial_pose(self.franka_pose)
-        
-        
+
+    def _create_part_builders(self):
+        self.part_builders:Dict[str, ActorBuilder] = {}
+        for part in self.furniture.parts:
+            part_builder = generate_builder_with_options_(
+                self.urdf_loader,
+                os.path.join(ASSET_ROOT, part.asset_file),
+                AssetOptions()
+            )
+            part_builder.set_name(part.name)
+            self.part_builders[part.name] = part_builder
+            pos, ori = self._get_reset_pose(part)
+            part_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
+            part_pose = sapien.Pose()
+            part_pose.set_p(
+                [part_pose_mat[0, 3], part_pose_mat[1, 3], part_pose_mat[2, 3]]
+            )
+            reset_ori = self.april_coord_to_sim_coord(ori)
+            part_pose.set_q(np.array(T.mat2quat(reset_ori[:3, :3]),dtype=np.float32))
+            part_builder.set_initial_pose(part_pose)
+            for collision_record in part_builder.collision_records:  
+                collision_record.material = sapien.physx.PhysxMaterial(
+                    sim_config["parts"]["friction"],
+                    sim_config["parts"]["friction"],
+                    self.restitution
+                )        
 
     def _add_light(self):
         for light in sim_config["lights"]:
@@ -355,14 +417,16 @@ class FurnitureEnv:
 
 
     def _set_viewer(self):
+        # If parallel_in_one_scene is enabled, all articulations and actors will be loaded 
+        # in one scene and rendered in only one render system
+        # If it is disabled, only one scene containing one instance of simulation will be
+        # display in the viewer
         self.viewer = Viewer()
         self.viewer.set_scene(self.scenes[0])
-
         control_window = self.viewer.control_window
         control_window.show_joint_axes = False
         control_window.show_camera_linesets = False
         
-        # Point camera at middle env.
         pose = sapien.Pose(p=[0.97,0,0.74])
 
         vec = np.array([-1, 0, 0.62],dtype=np.float32) - pose.get_p()
@@ -375,12 +439,32 @@ class FurnitureEnv:
         pose.set_rpy(rot.as_euler("xyz").astype(np.float32))
         self.viewer.set_camera_pose(pose)
 
+    def _get_reset_pose(self, part: Part):
+        """Get the reset pose of the part.
+
+        Args:
+            part: The part to get the reset pose.
+        """
+        pos = part.reset_pos[self.from_skill]
+        ori = part.reset_ori[self.from_skill]
+        return pos, ori
+
 
     def init_sim(self):
         self.physx_system.gpu_init()
         # NOTE(Yuke): Setting the initial qpos must be complete after gpu_init
-        self.physx_system.cuda_articulation_qpos.torch()[self.franka_entities[0].get_gpu_index(), :self.franka_num_dof] = torch.from_numpy(self.franka_default_dof_pos)
+        self.physx_system.cuda_articulation_qpos.torch()[self.franka_entities[0].get_gpu_index(), :self.franka_num_dof] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
         self.physx_system.gpu_apply_articulation_qpos()
+        if self.parallel_in_single_scene:
+            pass
+            # self.render_system_group = sapien.render.RenderSystemGroup([ s.render_system for s in self.scenes])
+        
+    def april_coord_to_sim_coord(self, april_coord_mat):
+        """Converts AprilTag coordinate to simulator base_tag coordinate."""
+        return self.april_to_sim_mat @ april_coord_mat
+    @property
+    def april_to_sim_mat(self):
+        return self.franka_from_origin_mat @ self.base_tag_from_robot_mat
 
 
 
