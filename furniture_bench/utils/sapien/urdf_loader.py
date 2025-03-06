@@ -653,15 +653,13 @@ class URDFLoader:
         articulation_builders:List[ArticulationBuilder] = []
         for root in roots:
             if len(self.link2child_joints[root]) == 0:
+                actor_builder = self._parse_actor(root)
+                # NOTE(Yuke): to optimize performance, static/kinematic Actor is better but pose
+                #           change after loading and building default 
                 if root == robot.base_link.name:
-                    actor_builder = self._parse_actor(root)
-                    # NOTE(Yuke): to optimize performance, static Actor is better but pose
-                    #           change after loading and building
                     if self.fix_root_link: # fix_root_actor kinematic Actor 
                         actor_builder.set_physx_body_type("kinematic")
-                    else:
-                        actor_builder.set_physx_body_type("dynamic")
-                    actor_builders.append(actor_builder)
+                actor_builders.append(actor_builder)
             else:
                 if root == robot.base_link.name:
                     fix_base = self.fix_root_link

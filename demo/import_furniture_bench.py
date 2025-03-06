@@ -2,7 +2,9 @@ import sapien.core
 import sapien
 import sapien.physx
 import sapien.render
+import pytorch_kinematics as pk
 from furniture_bench.utils.sapien.urdf_loader import URDFLoader
+from sapien.wrapper.urdf_exporter import export_kinematic_chain_urdf
 import sapien.utils.viewer.control_window
 from furniture_bench.utils.sapien import (
     load_scene_config,
@@ -23,7 +25,7 @@ from pathlib import Path
 from furniture_bench.furniture.furniture import Furniture
 from furniture_bench.utils.recorder import VideoRecorder
 import torch
-import gym
+import gymnasium as gym
 import numpy as np
 
 import furniture_bench.utils.transform as T
@@ -43,7 +45,7 @@ from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS, ROBOT_STATES
 from furniture_bench.furniture.parts.part import Part
 
 from ipdb import set_trace as bp
-from typing import Union, Tuple, List, Optional
+from typing import Union, Tuple, List, Optional, Literal
 
 from furniture_bench.sim_config_sapien import (
     sim_config,
@@ -61,6 +63,7 @@ ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_t
 # TODO:
 #      1. Action Input and output
 #      2. Shader
+#      3. Random Number Generator
 
 # NOTE(Yuke): 
 # 1. Currently no such shared collision shapes which can collide with elements in all Scenes.
@@ -73,6 +76,7 @@ class FurnitureEnv:
         num_envs: int = 1,
         headless: bool = False,
         parallel_in_single_scene: bool = False,
+        viewer:bool = False
     ):
         self.furniture_name = furniture_name
         self.num_envs = num_envs
@@ -83,11 +87,15 @@ class FurnitureEnv:
 
         # Predefined parameters
         self.device = torch.device("cuda")
+        self.time = 0
         self.sapien_device = sapien.Device(self.device.type)
         self.pose_dim = 7
         self.stiffness = 1000.00
         self.damping = 200.0
         self.restitution = 0.5
+        self.pos_scalar:float = 1.0
+        self.rot_scalar:float = 1.0
+        self.action_type:Literal[0, 1] = 0  # 0: pos mode, 1: delta mode
         self.last_grasp = torch.tensor([-1.0] * num_envs, device=self.device)
         self.grasp_margin = 0.02 - 0.001  # To prevent repeating open and close actions.
         self.max_gripper_width = config["robot"]["max_gripper_width"][
@@ -190,6 +198,7 @@ class FurnitureEnv:
         # load Scene configs
         sim_params: SimParams = sim_config["sim_params"]
         self.physx_system.set_timestep(sim_params.dt)
+        self.dt = sim_params.dt
         sapien.physx.set_scene_config(
             gravity=sim_params.gravity,
             bounce_threshold=sim_params.physx.bounce_threshold_velocity,
@@ -207,6 +216,7 @@ class FurnitureEnv:
 
         # Some info to store
         self.franka_entities:List[sapien.physx.PhysxArticulation] = []
+        
         self.static_obj_entites:Dict[str, List[sapien.Entity]] = {}
         self.part_entities:Dict[str, List[sapien.Entity]] = {}
         for key in self.static_obj_dict.keys():
@@ -214,7 +224,7 @@ class FurnitureEnv:
         for part in self.furniture.parts:
             self.part_entities[part.name] = []
         self.part_actors:Dict[str, List[sapien.Entity]] = {}
-        self.scene_offsets_np:List[np.ndarray] = []
+        self.scene_offsets_np:np.ndarray = np.zeros((self.num_envs, 3), dtype=np.float32)
         scene_grid_length = int(np.ceil(np.sqrt(self.num_envs)))
 
         if parallel_in_single_scene:
@@ -234,7 +244,7 @@ class FurnitureEnv:
                     scene_y * self.scene_spacing,
                     0,
                 ],dtype=np.float32)
-            self.scene_offsets_np.append(scene_offset)
+            self.scene_offsets_np[i] = scene_offset
             if parallel_in_single_scene:
                 scene = self.scenes[0]
             else:
@@ -311,23 +321,32 @@ class FurnitureEnv:
                 franka_entity.set_name("franka")
             
             if i == 0:
+                for link in franka_entity.links:
+                    if link.name.endswith("k_ee_link"):
+                        self.ee_link_index:int = link.get_index()
+                # NOTE(Yuke): we don't use integrated pinocchino of sapien to compute jacobian of end effector
+                #           we use pytorch_kinematics
+                # self.franka_pinocchio_model = franka_entity.create_pinocchio_model(gravity=sim_params.gravity)
+                self.franka_ee_chain = pk.build_serial_chain_from_urdf(export_kinematic_chain_urdf(franka_entity, force_fix_root=True).encode('utf-8'), end_link_name=f"link_{self.ee_link_index}").to(dtype=torch.float32, device=self.device)
                 self.franka_num_dof = franka_entity.get_dof()
                 self.franka_default_dof_pos = np.zeros(self.franka_num_dof, dtype=np.float32)
                 self.franka_default_dof_pos[:7] = np.array(
                     config["robot"]["reset_joints"], dtype=np.float32
                 )
                 self.franka_default_dof_pos[7:] = self.max_gripper_width / 2
+
                 
             # NOTE(Yuke): Refer to mani_skill utils structs articulations.py Articulation qpos
             # Direct setting with entity object is impossible for GPU Simulator
             # The setting of initial qpos must be conducted after the initialization of GPU physx_system.gpu_init()
             # franka_entity.set_qpos(self.franka_default_dof_pos)
-            self.franka_entities.append(franka_entity)
+            self.franka_entities.append(franka_entity)      
             for i, joint in enumerate(franka_entity.active_joints):
                 if i < 7:
                     joint.set_drive_properties(stiffness=self.stiffness, damping=self.damping)
                 else:
-                    joint.set_drive_properties(stiffness=self.stiffness, damping=0)
+                    # Direct qf control. Stiffness and dampling should be zero.
+                    joint.set_drive_properties(stiffness=0, damping=0)
 
             # For testing of the shape of Tensor
             # Automatically construct a tensor which contains q of all entities with the 
@@ -347,8 +366,26 @@ class FurnitureEnv:
         # TODO: add entities into the list
 
         self._add_light()
-        self._set_viewer()
+        # initializing Physx simulation scene on GPU (Load/Reset all qpos to the default qpos)
+        self._init_sim()
+        self._load_sensors()
+        if viewer:
+            self._set_viewer()
+        else:
+            self.viewer = None
 
+        # TODO: Set up Random Number Generator here to ensure the determinism
+        # TODO: Clear some redundant simulation info at the beginning (velocity infomation of rigid bodies and articulations including links and joints)
+        # TODO: Controller Reset (if we use self-implemented controller)
+        self._init_ctrl()
+
+        # TODO: For the Gym Env implementation, we then further define space (action_space, single_action_space, observation space)
+        # TODO: Setup the log for Gym
+        self.act_low = torch.from_numpy(self.action_space.low).to(device=self.device)
+        self.act_high = torch.from_numpy(self.action_space.high).to(device=self.device)
+        self.sim_steps = int(
+            1.0 / config["robot"]["hz"] / sim_config["sim_params"].dt + 0.1
+        )
     def _create_static_obj_builders(self):
         # Create builders for all static objs (Actorbuilder/ArticulationBuilder)
         self.static_obj_builders: Dict[str, ActorBuilder] = {}
@@ -358,6 +395,7 @@ class FurnitureEnv:
             self.static_obj_builders[key] = generate_builder_with_options_(
                 self.urdf_loader, os.path.join(ASSET_ROOT, value), opts
             )
+            self.static_obj_builders[key].set_physx_body_type("static")
             self.static_obj_builders[key].set_name(name=key)
 
         # Setup Config for objs
@@ -423,6 +461,7 @@ class FurnitureEnv:
 
     def _create_part_builders(self):
         self.part_builders:Dict[str, ActorBuilder] = {}
+        self.part_default_pose:Dict[str, np.ndarray] = {}
         for part in self.furniture.parts:
             part_builder = generate_builder_with_options_(
                 self.urdf_loader,
@@ -440,6 +479,13 @@ class FurnitureEnv:
             reset_ori = self.april_coord_to_sim_coord(ori)
             part_pose.set_q(np.array(T.mat2quat(reset_ori[:3, :3]),dtype=np.float32))
             part_builder.set_initial_pose(part_pose)
+            part_pose_np = np.zeros(7, dtype=np.float32)
+
+            # Store default pose for reseting
+            part_pose_np[:3] = part_pose.p
+            part_pose_np[3:] = part_pose.q
+            self.part_default_pose[part.name] = part_pose_np
+
             for collision_record in part_builder.collision_records:  
                 collision_record.material = sapien.physx.PhysxMaterial(
                     sim_config["parts"]["friction"],
@@ -466,21 +512,22 @@ class FurnitureEnv:
                 # NOTE(Yuke): for rendering in a single scenario
                 if self.parallel_in_single_scene:
                     break
-
+    def _load_sensors(self):
+        # TODO: implement sensor loading 
+        pass
 
     def _set_viewer(self):
         # If parallel_in_one_scene is enabled, all articulations and actors will be loaded 
         # in one scene and rendered in only one render system
         # If it is disabled, only one scene containing one instance of simulation will be
         # display in the viewer
-        self.viewer = Viewer()
+        self.viewer:Optional[Viewer] = Viewer()
         self.viewer.set_scene(self.scenes[0])
         control_window = self.viewer.control_window
         control_window.show_joint_axes = False
         control_window.show_camera_linesets = False
         
         pose = sapien.Pose(p=[0.97,0,0.74])
-
         vec = np.array([-1, 0, 0.62],dtype=np.float32) - pose.get_p()
         vec = vec / np.linalg.norm(vec)
         rot,_ = scipy.spatial.transform.Rotation.align_vectors(vec, [1, 0, 0])
@@ -500,64 +547,281 @@ class FurnitureEnv:
         pos = part.reset_pos[self.from_skill]
         ori = part.reset_ori[self.from_skill]
         return pos, ori
+    
+    def get_ee_pose(self)->torch.Tensor:
+        '''
+        Obtain the Pose of End Effector in world frame (Rotation is in the world frame.
+        Position is the relative position w.r.t the base) 
+        You should only read pose after you call `gpu_fetch_*` functions
+        '''
+        end_effector_pose = torch.zeros((self.num_envs, 7), dtype=torch.float32, device=self.device)
+        end_effector_pose[:] = self.physx_system.cuda_rigid_body_data.torch()[self.end_effector_gpu_index,:7]    
+        end_effector_pose[:,:3] -= self.physx_system.cuda_rigid_body_data.torch()[self.root_link_gpu_index, :3]
+        return end_effector_pose
+    
+    def get_qpos(self)->torch.Tensor:
+        '''
+        Obtain qpos of franka 
+        You should only read qpos after you call `gpu_fetch_*` functions
+        '''
+        qpos = torch.zeros((self.num_envs, self.franka_num_dof), dtype=torch.float32, device=self.device)
+        qpos = self.physx_system.cuda_articulation_qpos.torch()[self.franka_gpu_index, :self.franka_num_dof]
+        return qpos
+        
 
 
-    def init_sim(self):
+    def _init_sim(self):
         # torch seed can be added before
         self.physx_system.gpu_init() 
 
         # NOTE(Yuke): Setting the initial qpos must be complete after gpu_init
         #   and according to my understanding we should fetch first. Otherwise, the values stored
         #   in the buffer are undefined
+        # Fetch the preloaded info into the GPU buffer
         self.physx_system.gpu_fetch_rigid_dynamic_data()
         self.physx_system.gpu_fetch_articulation_link_pose()
+        self.reset_parts()
+        # set Vel of all actors to zero
         self.physx_system.cuda_rigid_body_data.torch()[:, 7:] = torch.zeros_like(self.physx_system.cuda_rigid_body_data.torch()[:, 7:])
-        self.reset_franka_qpos()
+        self.reset_franka()
 
         self.physx_system.gpu_apply_rigid_dynamic_data()
         self.physx_system.gpu_apply_articulation_root_pose()
         self.physx_system.gpu_apply_articulation_root_velocity()
         self.physx_system.gpu_apply_articulation_qpos()  
         self.physx_system.gpu_apply_articulation_qvel()
+        self.physx_system.gpu_update_articulation_kinematics()  #  ensure all updates have been applied to the system
+
         if self.parallel_in_single_scene:
             pass
             # self.render_system_group = sapien.render.RenderSystemGroup([ s.render_system for s in self.scenes])
+    def _init_ctrl(self):
+        self.step_ctrl = diffik_factory(
+            real_robot=False,
+            pos_scalar=self.pos_scalar,
+            rot_scalar=self.rot_scalar,
+        )
+        self.ctrl_started = True
+
+    def reset_franka(self):
+        # Since franka is fixed. No need to reset the root Pose
+        self.franka_gpu_index = torch.tensor([frank_entity.get_gpu_index() for frank_entity in self.franka_entities],dtype=torch.int32, device=self.device)
+        self.physx_system.cuda_articulation_qpos.torch()[self.franka_gpu_index, :self.franka_num_dof] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
+        self.physx_system.cuda_articulation_qvel.torch()[:, :] = torch.zeros_like(self.physx_system.cuda_articulation_qvel.torch()).to(self.device)
+        # NOTE(Yuke): Set the target position to the default position as well.
+        #   To avoid the error in some scenarios. For example, some joints directly are controlled 
+        #   with force and others are controlled with Physx PD Controller. After initialization, if someone 
+        #   only modifies force without giving the target qpos, the robot can bounce to some unknow
+        #   state because of the existence of PD Controller of Physx ()
+        self.physx_system.cuda_articulation_target_qpos.torch()[self.franka_gpu_index, :self.franka_num_dof] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
+        self.physx_system.cuda_articulation_link_data.torch()[:, 7:] = torch.zeros_like(self.physx_system.cuda_articulation_link_data.torch()[:, 7:]).to(self.device)
+        self.root_link_gpu_index = torch.zeros((self.num_envs), dtype=torch.int32)
+        self.end_effector_gpu_index = torch.zeros((self.num_envs), dtype=torch.int32)
+        for i, frank_entity in enumerate(self.franka_entities):
+            for link in frank_entity.links:
+                if link.name.endswith("panda_link0"):
+                    self.root_link_gpu_index[i] = link.get_gpu_pose_index()
+                elif link.name.endswith("k_ee_link"):
+                    self.end_effector_gpu_index[i] = link.get_gpu_pose_index()
+
+
+
+    def reset_parts(self):
+        self.parts_gpu_index:Dict[str, torch.Tensor] = {}
+        for key, value in self.part_entities.items():
+            part_gpu_index = torch.tensor([part_entity.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent).get_gpu_index() for part_entity in value]) 
+            self.parts_gpu_index[key] = part_gpu_index
+            part_pose_np = np.zeros((self.num_envs, 7), dtype=np.float32)
+            part_pose_np[:] = self.part_default_pose[key]  # broadcast
+            part_pose_np[:,:3] += self.scene_offsets_np
+            self.physx_system.cuda_rigid_body_data.torch()[part_gpu_index, :7] = torch.from_numpy(part_pose_np).to(self.device)
+            
+                
+    
+    def step_viewer(self):
+        if self.viewer is None:
+            return
+        self.physx_system.sync_poses_gpu_to_cpu()
+        # self.scenes[0].update_render()  # This is not needed for viewer rendering
+        self.viewer.render()
+
+
+    def _fetch_all(self):
+        # fetch data from the Physx
+        self.physx_system.gpu_fetch_rigid_dynamic_data()
+        self.physx_system.gpu_fetch_articulation_link_pose()
+        self.physx_system.gpu_fetch_articulation_link_velocity()
+        self.physx_system.gpu_fetch_articulation_qpos()
+        self.physx_system.gpu_fetch_articulation_qvel()
+        self.physx_system.gpu_fetch_articulation_qacc()
+        self.physx_system.gpu_fetch_articulation_target_qpos()
+        self.physx_system.gpu_fetch_articulation_target_qvel()
+
+    def _apply_all(self):
+        self.physx_system.gpu_apply_rigid_dynamic_data()
+        self.physx_system.gpu_apply_articulation_qpos()
+        self.physx_system.gpu_apply_articulation_qvel()
+        self.physx_system.gpu_apply_articulation_qf()
+        self.physx_system.gpu_apply_articulation_root_pose()
+        self.physx_system.gpu_apply_articulation_root_velocity()
+        self.physx_system.gpu_apply_articulation_target_position()
+        self.physx_system.gpu_apply_articulation_target_velocity()
+
+    def get_jacobian_ee(self, qpos:torch.Tensor) -> torch.Tensor:
+        # Pinocchio can only use loop to compute jacobian for multiple envs
+        # jacobian_ee = self.franka_pinocchio_model.compute_single_link_local_jacobian(qpos=qpos.cpu().numpy(), index=self.ee_link_index)
+        jacobian_ee = torch.zeros((self.num_envs, 6, self.franka_num_dof), dtype=torch.float32, device=self.device)
+        jacobian_ee[:,:,:7] = self.franka_ee_chain.jacobian(qpos[:,:7]) # last 2 dim is for gripper
+        return jacobian_ee
+
+    def step_sim(self, action: torch.Tensor):
+        # TODO(Yuke): rendering should also happens between fetch and apply. Reorganizing is needed
+        # x, y, z, 
+        # x, y, z, w
+        # Last dim of action is to decide whether to grip or not 
+        # Clip the action to be within the action space
+        action = torch.clamp(action, self.act_low, self.act_high)
+
+        self._fetch_all()
+
+        ee_pose = self.get_ee_pose()
+        if self.action_type == 1:
+            goal_pose = ee_pose.clone()
+            goal_pose[:, :3] += action[:, :3]
+            goal_pose[:, 3:] = C.quaternion_multiply(goal_pose[:, 3:].roll(-1, dims=-1), action[:, 3:7]).roll(1, dims=-1)
+        elif self.action_type == 0:
+            goal_pose = torch.zeros((self.num_envs, 7), dtype=torch.float32, device=self.device)
+            goal_pose[:,:3] = action[:,:3]
+            goal_pose[:,3:7] = action[:, 3:7].roll(1, dims=-1)
+
+        # SAPIEN uses wxyz, ctrl uses xyzw
+        self.step_ctrl.set_goal(goal_pose[:,:3], goal_pose[:,3:7].roll(-1, dims=-1))
+            
+        target_qpos = torch.zeros((self.num_envs, self.franka_num_dof), dtype=torch.float32, device=self.device)
+        target_qf = torch.zeros((self.num_envs, self.franka_num_dof), dtype=torch.float32, device=self.device)
+        gripper_action = torch.zeros((self.num_envs, 1), dtype=torch.float32, device=self.device)
+
+        grasp = action[:, -1]
+
+        # Avoid Oscilation of Grip
+        grip_sep = torch.where(
+            (torch.sign(grasp) != torch.sign(self.last_grasp))
+            & (torch.abs(grasp) > self.grasp_margin),
+            torch.where(grasp < 0, self.max_gripper_width, torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)),
+            torch.where(
+                self.last_grasp < 0,
+                self.max_gripper_width,
+                torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            ),
+        )
+        self.last_grasp = grasp
+        gripper_action[:, -1] = grip_sep
+        qpos = self.get_qpos()
+
         
-    def reset_franka_qpos(self):
-        frank_entities_gpu_index = torch.tensor([frank_entity.get_gpu_index() for frank_entity in self.franka_entities],dtype=torch.int32, device=self.device)
-        self.physx_system.cuda_articulation_qpos.torch()[frank_entities_gpu_index, :self.franka_num_dof] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
-        self.physx_system.cuda_articulation_qvel.torch()[:, :] = torch.zeros_like(self.physx_system.cuda_articulation_qvel.torch())
+        self.jacobian_ee = self.get_jacobian_ee(qpos)
+        # TODO: quaternion of python kinematics is xyzw or wxyz
+        state_dict = {
+            "ee_pos": ee_pose[:, :3],
+            "ee_quat": ee_pose[:, 3:7].roll(-1, dims=-1),
+            "joint_positions": qpos[:,:7],
+            "jacobian_diffik": self.jacobian_ee[:, :, :7],
+        }
+
+        gripper_action_mask = (grip_sep > 0).unsqueeze(1)
+
+        target_qf[:, 7:9] = torch.where(
+            gripper_action_mask,
+            sim_config["robot"]["gripper_torque"],
+            -sim_config["robot"]["gripper_torque"],
+        )
+
+        target_qpos[:, :7] = self.step_ctrl(state_dict)["joint_positions"]
+        target_qpos[:, 7:9] = torch.where(
+            gripper_action_mask,
+            self.max_gripper_width / 2,
+            torch.zeros_like(target_qpos[:, 7:9]),
+        ) # No use since it is qf control
+
+        # Write changes to buffer
+        self.physx_system.cuda_articulation_qf.torch()[:, :] = target_qf
+        self.physx_system.cuda_articulation_target_qpos.torch()[:, :] = target_qpos
+        self.physx_system.cuda_articulation_target_qvel.torch()[:, :] = torch.zeros((self.num_envs, self.franka_num_dof), dtype=torch.float32, device=self.device)
+
+        self._apply_all()
+        self.time += self.dt
+        
+
+    def step_render(self):
+        pass
+
     
     def april_coord_to_sim_coord(self, april_coord_mat):
         """Converts AprilTag coordinate to simulator base_tag coordinate."""
         return self.april_to_sim_mat @ april_coord_mat
+    
     @property
     def april_to_sim_mat(self):
         return self.franka_from_origin_mat @ self.base_tag_from_robot_mat
+    
+    @property
+    def action_space(self):
+        # Action space to be -1.0 to 1.0.
+        
+        pose_dim = 7
+
+        # Why here add one extra parameter here?
+        low = np.array([-1] * pose_dim + [-1], dtype=np.float32)
+        high = np.array([1] * pose_dim + [1], dtype=np.float32)
+
+        low = np.tile(low, (self.num_envs, 1))
+        high = np.tile(high, (self.num_envs, 1))
+
+        return gym.spaces.Box(low, high, (self.num_envs, pose_dim + 1))
 
 
 
 if __name__=="__main__":
-    sim = FurnitureEnv(furniture_name="lamp", num_envs=4, parallel_in_single_scene=True)
-    sim.init_sim()
+    sim_config["robot"]["gripper_torque"] = 0.002
+    sim = FurnitureEnv(furniture_name="lamp", num_envs=4, parallel_in_single_scene=True, viewer=True)
 
     # TODO: Currently please only use lamp for the simulation, since to use other furnitures
     #   file path change in the urdf file should be made.
     action = sim.franka_default_dof_pos[None,:].repeat(sim.num_envs,axis = 0)
+    sim.action_type = 1
+    action = torch.zeros_like(sim.act_low, device=sim.device)
 
     while not sim.viewer.closed:
-        sim.physx_system.step()
-        sim.physx_system.sync_poses_gpu_to_cpu()
-        sim.scenes[0].update_render()
-        sim.viewer.render()
-        # Random Policy
-        noise = np.random.rand(*action.shape)  - 0.5
-        noise[:, -2] = 0
-        action_np = action + 0.02 * noise
 
-        action_torch = torch.from_numpy(action_np).to(sim.device, dtype=torch.float32)
+        # sim._fetch_all()
+        # sim.get_jacobian_ee(sim.get_qpos())
+
+        # # Random Policy for gripper
+        # # Gripper is directly controlled with force
+        # noise = np.random.rand(*action.shape)  - 0.5
+        # noise[:, :-2] = 0
+        # action_np = action
+
+        # action_torch = torch.from_numpy(action_np).to(sim.device, dtype=torch.float32)
+        # noise_torch = torch.from_numpy(noise).to(sim.device, dtype = torch.float32) 
+        # sim.physx_system.cuda_articulation_target_qpos.torch()[:,:7] = action_torch[:,:7]
+        # # sim.physx_system.cuda_articulation_target_qvel.torch()[:, :] = torch.zeros_like(sim.physx_system.cuda_articulation_target_qvel.torch()).to(sim.device)
         
-        sim.physx_system.cuda_articulation_target_qpos.torch()[:, :] = action_torch[:, :]
-        # sim.physx_system.cuda_articulation_target_qvel.torch()[:, :] = torch.zeros_like(sim.physx_system.cuda_articulation_target_qvel.torch()).to(sim.device)
-        sim.physx_system.gpu_apply_articulation_target_position()
-        # sim.physx_system.gpu_apply_articulation_target_velocity()
+        # # Force Control of gripper
+        # sim.physx_system.cuda_articulation_qf.torch()[:,-2:] = 10 * noise_torch[:,-2:]
+        # # print(sim.physx_system.cuda_rigid_body_data.torch().shape)
+
+        # # It seems the order of applying values does not matter
+        # sim.physx_system.gpu_apply_articulation_qf()
+        # sim.physx_system.gpu_apply_articulation_target_position()
+        # # sim.physx_system.gpu_apply_articulation_target_velocity()
+        if sim.time >= 4:
+            action[:, -1] -= 0.001
+            action[:, 0] -= 0.0005 * sim.dt
+        sim.step_sim(action=action)
+
+    
+        # This should be put after the step in which we first set target
+        sim.physx_system.step()
+        sim.step_viewer()
+
