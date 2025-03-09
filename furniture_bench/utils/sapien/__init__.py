@@ -3,6 +3,8 @@ import sapien.physx
 import sapien.wrapper
 import sapien.render
 import os
+import numpy as np
+import scipy.spatial
 
 import sapien.wrapper.scene
 import sapien.wrapper.urdf_loader
@@ -108,3 +110,15 @@ def generate_builder_with_options_(loader:URDFLoader,urdf_path:str,options:Asset
     # there is no joint for actor
     return builder
 
+
+def camera_pose_from_look_at(pos:np.ndarray, target:np.ndarray)->sapien.Pose:
+    vec = target.astype(np.float32) - pos.astype(np.float32)
+    vec = vec / np.linalg.norm(vec)
+    pose = sapien.Pose(p = pos.astype(np.float32))
+    rot,_ = scipy.spatial.transform.Rotation.align_vectors(vec, [1, 0, 0])
+    if vec[0] < 0:
+        quat = np.zeros(4, dtype = np.float32)
+        quat[:3] = vec
+        rot =  rot * scipy.spatial.transform.Rotation.from_quat(quat) 
+    pose.set_rpy(rot.as_euler("xyz").astype(np.float32))
+    return pose

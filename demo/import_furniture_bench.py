@@ -1,6 +1,7 @@
 import sapien.core
 import sapien
 import sapien.physx
+from sapien.sensor import StereoDepthSensor, StereoDepthSensorConfig
 import sapien.render
 import pytorch_kinematics as pk
 from furniture_bench.utils.sapien.urdf_loader import URDFLoader
@@ -10,6 +11,7 @@ from furniture_bench.utils.sapien import (
     load_scene_config,
     generate_builder_with_options,
     generate_builder_with_options_,
+    camera_pose_from_look_at,
 )
 from sapien.utils.viewer import Viewer
 import os
@@ -52,6 +54,7 @@ from furniture_bench.sim_config_sapien import (
     AssetOptions,
     SimParams,
     PhysxParams,
+    CameraCfg
 )
 from furniture_bench.utils.sapien.actor_builder import ActorBuilder
 from furniture_bench.utils.sapien.articulation_builder import ArticulationBuilder
@@ -61,9 +64,10 @@ ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_t
 
 
 # TODO:
-#      1. Add Camera
+#      1. Camera Data Acquire
 #      2. Random Number Generator
 #      3. API to reset simualtion env
+#      4. RenderGroup for Parallel Rendering
 
 # NOTE(Yuke): 
 # 1. Currently no such shared collision shapes which can collide with elements in all Scenes.
@@ -100,6 +104,8 @@ class FurnitureEnv:
         self.max_gripper_width = config["robot"]["max_gripper_width"][
             self.furniture_name
         ]
+        self.obs_keys = {"color_image1" ,"color_image2" }
+
         self.furnitures = [furniture_factory(self.furniture_name) for _ in range(num_envs)]
         if self.num_envs == 1:
             self.furniture = self.furnitures[0]
@@ -107,7 +113,7 @@ class FurnitureEnv:
             self.furniture = furniture_factory(self.furniture_name)
 
         self.from_skill = 0 # TODO: to investigate the role of this parameter
-        self.scene_spacing = 3.0
+        
         if "factory" in self.furniture_name:
             # Adjust simulation parameters
             sim_config["sim_params"].dt = 1.0 / 120.0
@@ -127,6 +133,8 @@ class FurnitureEnv:
             "obstacle_front": "furniture/urdf/obstacle_front.urdf",
             "table": "furniture/urdf/table.urdf",
         }
+        # Pose setting of the scene in the simulation
+        self.scene_spacing = 3.0
         self.table_pos = np.array([0.8, 0.8, 0.4], dtype=np.float32)
 
         table_half_width = 0.015
@@ -177,7 +185,14 @@ class FurnitureEnv:
         )
         self.obstacle_left_pose.q = self.obstacle_front_pose.q
 
-        #%% General Setup
+        # Define parameters of the camera
+        self.resize_img = True
+        self.img_size = sim_config["camera"][
+            "resized_img_size" if self.resize_img else "color_img_size"
+        ]
+        self.shader_dir = os.path.join(os.path.dirname(sapien.__file__),"vulkan_shader","minimal")
+
+        #%% General Setup of Simulator
         sapien.physx.enable_gpu()
         self.physx_system = sapien.physx.PhysxGpuSystem(self.sapien_device)
         self.urdf_loader = URDFLoader()  # just used to generate builder
@@ -368,9 +383,11 @@ class FurnitureEnv:
         # TODO: add entities into the list
 
         self._add_light()
+        
         # initializing Physx simulation scene on GPU (Load/Reset all qpos to the default qpos)
         self._init_sim()
         self._load_sensors()
+
         if viewer:
             self._set_viewer()
         else:
@@ -515,8 +532,79 @@ class FurnitureEnv:
                 if self.parallel_in_single_scene:
                     break
     def _load_sensors(self):
-        # TODO: implement sensor loading 
-        pass
+        # TODO: implement sensor data reading
+        self.sensors:Dict[str, List[sapien.Entity]] = {}
+        # camera_obs = {}
+
+        # This camera can access depth information as well
+        def create_camera(name:str, i:int)->sapien.render.RenderCameraComponent:
+            scene = self.scenes[i]
+            cfg = CameraCfg()
+            # TODO: Load from Render
+
+            if name == "wrist":
+                if self.resize_img:
+                    cfg.fovy = 55.0
+                pose = sapien.Pose(p = [-0.04, 0, -0.05])        
+                pose.set_rpy([0, np.radians(-70.0), 0])
+                camera = sapien.render.RenderCameraComponent(cfg.width, cfg.height, shader_dir=self.shader_dir)
+                camera.set_fovy(cfg.fovy)
+                camera.set_far(cfg.far)
+                camera.set_near(cfg.near)
+                camera.set_name(name)
+                camera.set_gpu_pose_batch_index(self.end_effector_gpu_index[i].cpu().item())
+                self.franka_entities[i].links[self.ee_link_index].entity.add_component(camera)
+                camera.set_local_pose(pose)
+            elif name == "front":
+                pose = camera_pose_from_look_at(
+                    np.array([0.9, -0.00, 0.65]),
+                    np.array([-1, -0.00, 0.3])
+                )
+                camera = sapien.render.RenderCameraComponent(cfg.width, cfg.height, shader_dir=self.shader_dir)
+                camera.set_fovy(cfg.fovy)
+                camera.set_far(cfg.far)
+                camera.set_near(cfg.near)
+                camera.set_name(name)
+                camera_mount = sapien.Entity()
+                camera_mount.add_component(camera)
+                camera_mount.set_name(name)
+                scene.add_entity(camera_mount)
+                camera.set_local_pose(pose)
+            elif name == "rear":
+                pose = sapien.Pose(
+                    p = [self.franka_pose.p[0] + 0.08, 0, self.franka_pose.p[2] + 0.2]
+                )
+                pose.set_rpy([0, np.radians(35), 0])
+                camera = sapien.render.RenderCameraComponent(cfg.width, cfg.height, shader_dir=self.shader_dir)
+                camera.set_fovy(cfg.fovy)
+                camera.set_far(cfg.far)
+                camera.set_near(cfg.near)
+                camera.set_name(name)
+                camera_mount = sapien.Entity()
+                camera_mount.add_component(camera)
+                camera_mount.set_name(name)
+                scene.add_entity(camera_mount)
+            return camera
+        
+        camera_names = {"1":"wrist", "2":"front"}
+
+        if not self.parallel_in_single_scene:
+            for i, scene in enumerate(self.scenes):
+                for k in self.obs_keys:
+                    if k.startswith("color"):
+                        camera_name = camera_names[k[-1]]
+                    elif k.startswith("depth"):
+                        camera_name = camera_names[k[-1]]
+                    else:
+                        continue
+                    if camera_name not in self.sensors and camera_name in camera_names.values():
+                        self.sensors[camera_name] = []
+                    if len(self.sensors[camera_name]) <= i:
+                        self.sensors[camera_name].append(create_camera(camera_name, i))
+        
+                
+                
+        
 
     def _set_viewer(self):
         # If parallel_in_one_scene is enabled, all articulations and actors will be loaded 
@@ -529,15 +617,7 @@ class FurnitureEnv:
         control_window.show_joint_axes = False
         control_window.show_camera_linesets = False
         
-        pose = sapien.Pose(p=[0.97,0,0.74])
-        vec = np.array([-1, 0, 0.62],dtype=np.float32) - pose.get_p()
-        vec = vec / np.linalg.norm(vec)
-        rot,_ = scipy.spatial.transform.Rotation.align_vectors(vec, [1, 0, 0])
-        if vec[0] < 0:
-            quat = np.zeros(4, dtype = np.float32)
-            quat[:3] = vec
-            rot =  rot * scipy.spatial.transform.Rotation.from_quat(quat) 
-        pose.set_rpy(rot.as_euler("xyz").astype(np.float32))
+        pose = camera_pose_from_look_at(np.array([0.97,0,0.74]), np.array([-1, 0, 0.62]))
         self.viewer.set_camera_pose(pose)
 
     def _get_reset_pose_part(self, part: Part):
@@ -625,7 +705,9 @@ class FurnitureEnv:
     def get_observation(self)->Dict[str, torch.Tensor]:
 
         obs = {}
-        
+
+
+        # TODO(Yuke): make it possible to choose which state to read
         obs["robot_state"] = self.get_robot_state()
 
         # TODO:add other sensor observations
@@ -740,7 +822,7 @@ class FurnitureEnv:
         jacobian_ee[:,:,:7] = self.franka_ee_chain.jacobian(qpos[:,:7]) # last 2 dim is for gripper
         return jacobian_ee
     
-
+    @torch.no_grad()
     def step(self, action:torch.Tensor)->Dict[str,torch.Tensor]:
         # TODO: add observation data
         obs = self.get_observation()
@@ -865,7 +947,7 @@ class FurnitureEnv:
 
 if __name__=="__main__":
     sim_config["robot"]["gripper_torque"] = 0.002
-    sim = FurnitureEnv(furniture_name="lamp", num_envs=4, parallel_in_single_scene=True, viewer=True)
+    sim = FurnitureEnv(furniture_name="lamp", num_envs=4, parallel_in_single_scene=False, viewer=True)
 
     # TODO: Currently please only use lamp for the simulation, since to use other furnitures
     #   file path change in the urdf file should be made.

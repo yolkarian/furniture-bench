@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import sapien
 import numpy as np
 from numpy.typing import NDArray
-
+from typing import Optional
 from furniture_bench.config import config
 
 sim_config = config.copy()
@@ -70,6 +70,16 @@ class AssetOptions:
     disable_gravity:bool = False
     enable_gyroscopic_forces:bool = True
     # NOTE(YUKE): Sapien cannot set the following parameters: flip_visual_attachments, thickness, max_linear_velocity, max_angular_velocity, enable_gyroscopic_forces
+
+
+@dataclass
+class CameraCfg:
+    name:Optional[str] = None
+    width:int = 1280
+    height:int = 720
+    fovy:float = 40.0
+    near:float = 0.001
+    far:float = 2.0
 
     
 
