@@ -12,7 +12,20 @@ from sapien.wrapper.articulation_builder import ActorBuilder, ArticulationBuilde
 from sapien.render import RenderCameraComponent 
 from furniture_bench.sim_config_sapien import SimParams, AssetOptions
 from .urdf_loader import URDFLoader
-from typing import List, Tuple, Union, Optional
+from typing import List, Tuple, Union, Optional, Dict, Callable
+import torch
+
+# Valid for minimal shader
+OBS_KEY_2_PICTURE_NAME:Dict[str, str] = {
+    "color":"Color",
+    "depth":"PositionSegmentation",
+    "position":"PositionSegmentation"
+    }
+
+OBS_KEY_2_TRANSFORM:Dict[str, Callable[[torch.Tensor], torch.Tensor]] = {
+    "color": lambda data: data[..., :3],
+    "depth": lambda data: -data[..., [2]],
+}
 
 # Temporily Scene loading for the scene
 def load_scene_config(scene: sapien.Scene, cfg: SimParams) -> None:

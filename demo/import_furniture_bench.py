@@ -10,6 +10,8 @@ import sapien.utils.viewer.control_window
 from furniture_bench.utils.sapien import (
     load_scene_config,
     generate_builder_with_options,
+    OBS_KEY_2_PICTURE_NAME,
+    OBS_KEY_2_TRANSFORM,
     generate_builder_with_options_,
     camera_pose_from_look_at,
 )
@@ -47,7 +49,7 @@ from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS, ROBOT_STATES
 from furniture_bench.furniture.parts.part import Part
 
 from ipdb import set_trace as bp
-from typing import Union, Tuple, List, Optional, Literal
+from typing import Union, Tuple, List, Optional, Literal, Set
 
 from furniture_bench.sim_config_sapien import (
     sim_config,
@@ -209,9 +211,6 @@ class FurnitureEnv:
         self._create_part_builders()
 
 
-        #%% Create Scenes
-        self.scenes: List[sapien.Scene] = []
-
         # load Scene configs
         sim_params: SimParams = sim_config["sim_params"]
         self.physx_system.set_timestep(sim_params.dt)
@@ -231,167 +230,21 @@ class FurnitureEnv:
             solver_velocity_iterations=sim_params.physx.num_velocity_iterations,
         )
 
-        # Some info to store
-        self.franka_entities:List[sapien.physx.PhysxArticulation] = []
-        
-        self.static_obj_entites:Dict[str, List[sapien.Entity]] = {}
-        self.part_entities:Dict[str, List[sapien.Entity]] = {}
-        for key in self.static_obj_dict.keys():
-            self.static_obj_entites[key] = []
-        for part in self.furniture.parts:
-            self.part_entities[part.name] = []
-        self.part_actors:Dict[str, List[sapien.Entity]] = {}
-        self.scene_offsets_np:np.ndarray = np.zeros((self.num_envs, 3), dtype=np.float32)
-        scene_grid_length = int(np.ceil(np.sqrt(self.num_envs)))
-
-        if parallel_in_single_scene:
-            self.scenes.append(sapien.Scene(
-                    systems=[
-                        self.physx_system,
-                        sapien.render.RenderSystem(self.sapien_device),
-                    ]  # cuda also for the rendering
-            ))
-        for i in range(self.num_envs):
-            scene_x, scene_y = (
-                i % scene_grid_length - scene_grid_length // 2,
-                i // scene_grid_length - scene_grid_length // 2,
-            )
-            scene_offset = np.array(                [
-                    scene_x * self.scene_spacing,
-                    scene_y * self.scene_spacing,
-                    0,
-                ],dtype=np.float32)
-            self.scene_offsets_np[i] = scene_offset
-            if parallel_in_single_scene:
-                scene = self.scenes[0]
-            else:
-                scene = sapien.Scene(
-                    systems=[
-                        self.physx_system,
-                        sapien.render.RenderSystem(self.sapien_device),
-                    ]  # cuda also for the rendering
-                )
-                self.physx_system.set_scene_offset(
-                    scene,
-                    scene_offset,
-                )    
-
-            self.ground_builder.set_scene(scene)
-            # Set collision group to avoid collision between different scene
-            self.ground_builder.collision_groups[3] &= 0xffff
-            self.ground_builder.collision_groups[3] |= i << 16
-            if self.parallel_in_single_scene:
-                tmp_name = self.ground_builder.name
-                tmp_initial_p = self.ground_builder.initial_pose.p.copy()
-                self.ground_builder.set_name(f"scene_{i}_{tmp_name}")
-                self.ground_builder.initial_pose.set_p(scene_offset + tmp_initial_p)
-
-            self.ground_builder.build()
-            if self.parallel_in_single_scene:
-                self.ground_builder.set_name(tmp_name)
-                self.ground_builder.initial_pose.set_p(tmp_initial_p)
-
-            for key, value in self.static_obj_builders.items():
-                value.set_scene(scene)
-                value.collision_groups[3] &= 0xffff
-                value.collision_groups[3] |= i << 16
-                if self.parallel_in_single_scene:
-                    tmp_name = value.name
-                    tmp_initial_p = value.initial_pose.p.copy()
-                    value.set_name(f"scene_{i}_{tmp_name}")
-                    value.initial_pose.set_p(scene_offset + tmp_initial_p)
-                obj_entity = value.build()
-                self.static_obj_entites[key].append(obj_entity)
-                if self.parallel_in_single_scene:
-                    value.set_name(tmp_name)
-                    value.initial_pose.set_p(tmp_initial_p)
-
-
-            for key, value in self.part_builders.items():
-                value.set_scene(scene)
-                value.collision_groups[3] &= 0xffff
-                value.collision_groups[3] |= i << 16
-                if self.parallel_in_single_scene:
-                    tmp_name = value.name
-                    tmp_initial_p = value.initial_pose.p.copy()
-                    value.set_name(f"scene_{i}_{tmp_name}")
-                    value.initial_pose.set_p(scene_offset + tmp_initial_p)
-                part_entity = value.build()
-                self.part_entities[key].append(part_entity)
-                if self.parallel_in_single_scene:
-                    value.set_name(tmp_name)
-                    value.initial_pose.set_p(tmp_initial_p)
-
-            self.frank_builder.set_scene(scene)
-            if self.parallel_in_single_scene:
-                tmp_initial_p = self.frank_builder.initial_pose.p.copy()
-                self.frank_builder.initial_pose.set_p(scene_offset + self.frank_builder.initial_pose.get_p())
-            for link_builder in self.frank_builder.link_builders:
-                link_builder.collision_groups[3] &= 0xffff
-                link_builder.collision_groups[3] |= i << 16
-                # links without one articulation haven't been changed in this case
-            franka_entity = self.frank_builder.build() # Actually, this object is not Entity
-            if self.parallel_in_single_scene:
-                franka_entity.set_name(f"scene_{i}_franka")
-                self.frank_builder.initial_pose.set_p(tmp_initial_p)
-            else:
-                franka_entity.set_name("franka")
-            
-            if i == 0:
-                for link in franka_entity.links:
-                    if link.name.endswith("k_ee_link"):
-                        self.ee_link_index:int = link.get_index()
-                # NOTE(Yuke): we don't use integrated pinocchino of sapien to compute jacobian of end effector
-                #           we use pytorch_kinematics
-                # self.franka_pinocchio_model = franka_entity.create_pinocchio_model(gravity=sim_params.gravity)
-                self.franka_ee_chain = pk.build_serial_chain_from_urdf(export_kinematic_chain_urdf(franka_entity, force_fix_root=True).encode('utf-8'), end_link_name=f"link_{self.ee_link_index}").to(dtype=torch.float32, device=self.device)
-                self.franka_num_dof = franka_entity.get_dof()
-                self.franka_default_dof_pos = np.zeros(self.franka_num_dof, dtype=np.float32)
-                self.franka_default_dof_pos[:7] = np.array(
-                    config["robot"]["reset_joints"], dtype=np.float32
-                )
-                self.franka_default_dof_pos[7:] = self.max_gripper_width / 2
-
-                
-            # NOTE(Yuke): Refer to mani_skill utils structs articulations.py Articulation qpos
-            # Direct setting with entity object is impossible for GPU Simulator
-            # The setting of initial qpos must be conducted after the initialization of GPU physx_system.gpu_init()
-            # franka_entity.set_qpos(self.franka_default_dof_pos)
-            self.franka_entities.append(franka_entity)      
-            for i, joint in enumerate(franka_entity.active_joints):
-                if i < 7:
-                    joint.set_drive_properties(stiffness=self.stiffness, damping=self.damping)
-                else:
-                    # Direct qf control. Stiffness and dampling should be zero.
-                    joint.set_drive_properties(stiffness=0, damping=0)
-
-            # For testing of the shape of Tensor
-            # Automatically construct a tensor which contains q of all entities with the 
-            # same configuration. (m, dof)
-            # self.frank_builder.set_initial_pose(
-            #     sapien.Pose(
-            #         p = [2.0 + 0.5 * -self.table_pos[0] + 0.1, 0, table_surface_z + ROBOT_HEIGHT]
-            #     )
-            # )
-            # franka_entity.set_name("franka_extra_test")
-            # franka_entity = self.frank_builder.build()
-            # self.franka_entities.append(franka_entity)
-
-            self.scenes.append(scene)
-
-        
-        # TODO: add entities into the list
-
+        self._create_scenes()
         self._add_light()
         
         # initializing Physx simulation scene on GPU (Load/Reset all qpos to the default qpos)
         self._init_sim()
-        self._load_sensors()
 
         if viewer:
-            self._set_viewer()
+            # viewer uses different pipeline
+            self._init_viewer()
         else:
             self.viewer = None
+        if not self.parallel_in_single_scene:
+            self._load_sensors()
+            self._init_render()
+
 
         # TODO: Set up Random Number Generator here to ensure the determinism
         # TODO: Clear some redundant simulation info at the beginning (velocity infomation of rigid bodies and articulations including links and joints)
@@ -510,7 +363,157 @@ class FurnitureEnv:
                     sim_config["parts"]["friction"],
                     sim_config["parts"]["friction"],
                     self.restitution
-                )        
+                )  
+    def _create_scenes(self):
+        #%% Create Scenes
+        self.scenes: List[sapien.Scene] = []
+        # Some info to store
+        self.franka_entities:List[sapien.physx.PhysxArticulation] = []
+        
+        self.static_obj_entites:Dict[str, List[sapien.Entity]] = {}
+        self.part_entities:Dict[str, List[sapien.Entity]] = {}
+        for key in self.static_obj_dict.keys():
+            self.static_obj_entites[key] = []
+        for part in self.furniture.parts:
+            self.part_entities[part.name] = []
+        self.part_actors:Dict[str, List[sapien.Entity]] = {}
+        self.scene_offsets_np:np.ndarray = np.zeros((self.num_envs, 3), dtype=np.float32)
+        scene_grid_length = int(np.ceil(np.sqrt(self.num_envs)))
+
+        if self.parallel_in_single_scene:
+            self.scenes.append(sapien.Scene(
+                    systems=[
+                        self.physx_system,
+                        sapien.render.RenderSystem(self.sapien_device),
+                    ]  # cuda also for the rendering
+            ))
+        for i in range(self.num_envs):
+            scene_x, scene_y = (
+                i % scene_grid_length - scene_grid_length // 2,
+                i // scene_grid_length - scene_grid_length // 2,
+            )
+            scene_offset = np.array(                [
+                    scene_x * self.scene_spacing,
+                    scene_y * self.scene_spacing,
+                    0,
+                ],dtype=np.float32)
+            self.scene_offsets_np[i] = scene_offset
+            if self.parallel_in_single_scene:
+                scene = self.scenes[0]
+            else:
+                scene = sapien.Scene(
+                    systems=[
+                        self.physx_system,
+                        sapien.render.RenderSystem(self.sapien_device),
+                    ]  # cuda also for the rendering
+                )
+                self.physx_system.set_scene_offset(
+                    scene,
+                    scene_offset,
+                )    
+
+            self.ground_builder.set_scene(scene)
+            # Set collision group to avoid collision between different scene
+            self.ground_builder.collision_groups[3] &= 0xffff
+            self.ground_builder.collision_groups[3] |= i << 16
+            if self.parallel_in_single_scene:
+                tmp_name = self.ground_builder.name
+                tmp_initial_p = self.ground_builder.initial_pose.p.copy()
+                self.ground_builder.set_name(f"scene_{i}_{tmp_name}")
+                self.ground_builder.initial_pose.set_p(scene_offset + tmp_initial_p)
+
+            self.ground_builder.build()
+            if self.parallel_in_single_scene:
+                self.ground_builder.set_name(tmp_name)
+                self.ground_builder.initial_pose.set_p(tmp_initial_p)
+
+            for key, value in self.static_obj_builders.items():
+                value.set_scene(scene)
+                value.collision_groups[3] &= 0xffff
+                value.collision_groups[3] |= i << 16
+                if self.parallel_in_single_scene:
+                    tmp_name = value.name
+                    tmp_initial_p = value.initial_pose.p.copy()
+                    value.set_name(f"scene_{i}_{tmp_name}")
+                    value.initial_pose.set_p(scene_offset + tmp_initial_p)
+                obj_entity = value.build()
+                self.static_obj_entites[key].append(obj_entity)
+                if self.parallel_in_single_scene:
+                    value.set_name(tmp_name)
+                    value.initial_pose.set_p(tmp_initial_p)
+
+
+            for key, value in self.part_builders.items():
+                value.set_scene(scene)
+                value.collision_groups[3] &= 0xffff
+                value.collision_groups[3] |= i << 16
+                if self.parallel_in_single_scene:
+                    tmp_name = value.name
+                    tmp_initial_p = value.initial_pose.p.copy()
+                    value.set_name(f"scene_{i}_{tmp_name}")
+                    value.initial_pose.set_p(scene_offset + tmp_initial_p)
+                part_entity = value.build()
+                self.part_entities[key].append(part_entity)
+                if self.parallel_in_single_scene:
+                    value.set_name(tmp_name)
+                    value.initial_pose.set_p(tmp_initial_p)
+
+            self.frank_builder.set_scene(scene)
+            if self.parallel_in_single_scene:
+                tmp_initial_p = self.frank_builder.initial_pose.p.copy()
+                self.frank_builder.initial_pose.set_p(scene_offset + self.frank_builder.initial_pose.get_p())
+            for link_builder in self.frank_builder.link_builders:
+                link_builder.collision_groups[3] &= 0xffff
+                link_builder.collision_groups[3] |= i << 16
+                # links without one articulation haven't been changed in this case
+            franka_entity = self.frank_builder.build() # Actually, this object is not Entity
+            if self.parallel_in_single_scene:
+                franka_entity.set_name(f"scene_{i}_franka")
+                self.frank_builder.initial_pose.set_p(tmp_initial_p)
+            else:
+                franka_entity.set_name("franka")
+            
+            if i == 0:
+                for link in franka_entity.links:
+                    if link.name.endswith("k_ee_link"):
+                        self.ee_link_index:int = link.get_index()
+                # NOTE(Yuke): we don't use integrated pinocchino of sapien to compute jacobian of end effector
+                #           we use pytorch_kinematics
+                # self.franka_pinocchio_model = franka_entity.create_pinocchio_model(gravity=sim_params.gravity)
+                self.franka_ee_chain = pk.build_serial_chain_from_urdf(export_kinematic_chain_urdf(franka_entity, force_fix_root=True).encode('utf-8'), end_link_name=f"link_{self.ee_link_index}").to(dtype=torch.float32, device=self.device)
+                self.franka_num_dof = franka_entity.get_dof()
+                self.franka_default_dof_pos = np.zeros(self.franka_num_dof, dtype=np.float32)
+                self.franka_default_dof_pos[:7] = np.array(
+                    config["robot"]["reset_joints"], dtype=np.float32
+                )
+                self.franka_default_dof_pos[7:] = self.max_gripper_width / 2
+
+                
+            # NOTE(Yuke): Refer to mani_skill utils structs articulations.py Articulation qpos
+            # Direct setting with entity object is impossible for GPU Simulator
+            # The setting of initial qpos must be conducted after the initialization of GPU physx_system.gpu_init()
+            # franka_entity.set_qpos(self.franka_default_dof_pos)
+            self.franka_entities.append(franka_entity)      
+            for i, joint in enumerate(franka_entity.active_joints):
+                if i < 7:
+                    joint.set_drive_properties(stiffness=self.stiffness, damping=self.damping)
+                else:
+                    # Direct qf control. Stiffness and dampling should be zero.
+                    joint.set_drive_properties(stiffness=0, damping=0)
+
+            # For testing of the shape of Tensor
+            # Automatically construct a tensor which contains q of all entities with the 
+            # same configuration. (m, dof)
+            # self.frank_builder.set_initial_pose(
+            #     sapien.Pose(
+            #         p = [2.0 + 0.5 * -self.table_pos[0] + 0.1, 0, table_surface_z + ROBOT_HEIGHT]
+            #     )
+            # )
+            # franka_entity.set_name("franka_extra_test")
+            # franka_entity = self.frank_builder.build()
+            # self.franka_entities.append(franka_entity)
+
+            self.scenes.append(scene)      
 
     def _add_light(self):
         for light in sim_config["lights"]:
@@ -532,15 +535,15 @@ class FurnitureEnv:
                 if self.parallel_in_single_scene:
                     break
     def _load_sensors(self):
-        # TODO: implement sensor data reading
-        self.sensors:Dict[str, List[sapien.Entity]] = {}
+        # TODO: sensor data loading
+        self.sensors:Dict[str, List[sapien.render.RenderBodyComponent]] = {}
+        self.sensor_keys: Dict[str, Set[str]] = {} # TODO
         # camera_obs = {}
-
         # This camera can access depth information as well
-        def create_camera(name:str, i:int)->sapien.render.RenderCameraComponent:
+        def create_camera(name:str, i:int)->sapien.render.RenderCameraComponent:\
+            
             scene = self.scenes[i]
             cfg = CameraCfg()
-            # TODO: Load from Render
 
             if name == "wrist":
                 if self.resize_img:
@@ -586,27 +589,64 @@ class FurnitureEnv:
                 scene.add_entity(camera_mount)
             return camera
         
-        camera_names = {"1":"wrist", "2":"front"}
+        self.camera_names_dict = {"1":"wrist", "2":"front"}
+        # TODO: Add picture name according to the obs_keys
 
         if not self.parallel_in_single_scene:
             for i, scene in enumerate(self.scenes):
                 for k in self.obs_keys:
                     if k.startswith("color"):
-                        camera_name = camera_names[k[-1]]
+                        camera_name = self.camera_names_dict[k[-1]]
+                        obs_key = "color"
                     elif k.startswith("depth"):
-                        camera_name = camera_names[k[-1]]
+                        camera_name = self.camera_names_dict[k[-1]]
+                        obs_key = "depth"
                     else:
                         continue
-                    if camera_name not in self.sensors and camera_name in camera_names.values():
+                    if camera_name not in self.sensor_keys:
+                        self.sensor_keys[camera_name] = set()
+                    self.sensor_keys[camera_name].add(OBS_KEY_2_PICTURE_NAME[obs_key])
+                    if camera_name not in self.sensors:
                         self.sensors[camera_name] = []
+                    
                     if len(self.sensors[camera_name]) <= i:
                         self.sensors[camera_name].append(create_camera(camera_name, i))
+    
+    def _init_render(self):
         
-                
-                
+        for rb, gpu_pose_index in self._get_render_bodies():
+            if rb is not None:
+                for shape in rb.render_shapes:
+                    shape.set_gpu_pose_batch_index(gpu_pose_index)
         
+        self.render_system_group = sapien.render.RenderSystemGroup([scene.render_system for scene in self.scenes])
+        self.render_system_group.set_cuda_poses(self.physx_system.cuda_rigid_body_data)
 
-    def _set_viewer(self):
+        self.sensor_groups:Dict[str, sapien.render.RenderCameraGroup] = {}
+        # init sensors
+        for name, sensor in self.sensors.items():
+            self.sensor_groups[name] = self.render_system_group.create_camera_group(
+                sensor, picture_names=list(self.sensor_keys[name])
+            )
+        self.render_system_group.update_render()
+
+    def get_sensor_obs(self)->Dict[str, torch.Tensor]:
+        sensor_obs = {}
+        sensor_raw_obs = {camera_name : {picture_name: sensor_group.get_picture_cuda(picture_name).torch() for picture_name in self.sensor_keys[camera_name]} for camera_name, sensor_group in self.sensor_groups.items()}
+
+        for key in self.obs_keys:
+            if key.startswith("color"):
+                camera_name = self.camera_names_dict[key[-1]]
+                obs_key = "color"
+            elif key.startswith("depth"):
+                camera_name = self.camera_names_dict[key[-1]]
+                obs_key = "depth"
+            else:
+                continue
+            sensor_obs[key] = OBS_KEY_2_TRANSFORM[obs_key](sensor_raw_obs[camera_name][OBS_KEY_2_PICTURE_NAME[obs_key]])
+        return sensor_obs          
+
+    def _init_viewer(self):
         # If parallel_in_one_scene is enabled, all articulations and actors will be loaded 
         # in one scene and rendered in only one render system
         # If it is disabled, only one scene containing one instance of simulation will be
@@ -619,6 +659,36 @@ class FurnitureEnv:
         
         pose = camera_pose_from_look_at(np.array([0.97,0,0.74]), np.array([-1, 0, 0.62]))
         self.viewer.set_camera_pose(pose)
+
+        # Initial rendering
+        self.physx_system.sync_poses_gpu_to_cpu()
+        self.viewer.render()
+
+    def _get_render_bodies(self)-> List[Tuple[sapien.render.RenderBodyComponent, int]]:
+        """Get the render bodies and the indices for initing GPU rendering. Static Objects are not included
+
+        Returns:
+            List[Tuple[sapien.render.RenderBodyComponent, int]]: List of pair (RenderBodyComponent, index)
+        """
+        render_bodies = []
+        render_bodies += [
+            (
+                part_entity.find_component_by_type(sapien.render.RenderBodyComponent),
+                part_entity.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent).gpu_pose_index,
+            )
+            for part_entities in self.part_entities.values()
+            for part_entity in part_entities
+        ]
+        render_bodies += [
+            (
+                link.entity.find_component_by_type(sapien.render.RenderBodyComponent),
+                link.gpu_pose_index,
+            )
+            for frank_entity in self.franka_entities
+            for link in frank_entity.links
+        ]
+
+        return render_bodies
 
     def _get_reset_pose_part(self, part: Part):
         """Get the reset pose of the part.
@@ -676,7 +746,7 @@ class FurnitureEnv:
         qpos = self.get_qpos()
         joint_positions = qpos[:,:7]
         joint_velocities = self.get_qvel()[:, :7]
-        # TODO: joint torque
+        # NOTE(Yuke): This is applied joint torch
         joint_torques = self.stiffness * (self.physx_system.cuda_articulation_target_qpos.torch()[:, :7] - joint_positions) \
             + self.damping * (self.physx_system.cuda_articulation_target_qvel.torch()[:, :7] - joint_velocities) 
         
@@ -706,11 +776,10 @@ class FurnitureEnv:
 
         obs = {}
 
-
         # TODO(Yuke): make it possible to choose which state to read
         obs["robot_state"] = self.get_robot_state()
-
-        # TODO:add other sensor observations
+        if self.render_system_group is not None:
+            obs.update(self.get_sensor_obs().items())
 
         return obs
 
@@ -739,9 +808,6 @@ class FurnitureEnv:
         self.physx_system.gpu_apply_articulation_qvel()
         self.physx_system.gpu_update_articulation_kinematics()  #  ensure all updates have been applied to the system
 
-        if self.parallel_in_single_scene:
-            pass
-            # self.render_system_group = sapien.render.RenderSystemGroup([ s.render_system for s in self.scenes])
     def _init_ctrl(self):
         self.step_ctrl = diffik_factory(
             real_robot=False,
@@ -827,10 +893,10 @@ class FurnitureEnv:
         # TODO: add observation data
         obs = self.get_observation()
         self.update_action(action)
-        self.update_rendering()
         self._apply_all()
         self.physx_system.step()
         self._fetch_all()
+        self.update_render()
         self.time += self.dt
         self.envs_step+= 1
         return obs
@@ -911,13 +977,14 @@ class FurnitureEnv:
         self.physx_system.cuda_articulation_target_qpos.torch()[:, :] = target_qpos
         self.physx_system.cuda_articulation_target_qvel.torch()[:, :] = torch.zeros((self.num_envs, self.franka_num_dof), dtype=torch.float32, device=self.device)
 
-    def update_rendering(self):
+    def update_render(self):
         self.step_viewer()
         self.step_sensor()
 
     def step_sensor(self):
-        # TODO: update the sensor information here
-        pass
+        if self.render_system_group is None:
+            return
+        self.render_system_group.update_render()
         
 
     
@@ -983,7 +1050,6 @@ if __name__=="__main__":
             action[:, -1] -= 0.001
             action[:, 0] -= 0.0005 * sim.dt
         sim.step(action)
-
     
         # This should be put after the step in which we first set target
         # sim.physx_system.step()
