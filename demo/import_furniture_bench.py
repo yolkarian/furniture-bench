@@ -1,7 +1,6 @@
 import sapien.core
 import sapien
 import sapien.physx
-from sapien.sensor import StereoDepthSensor, StereoDepthSensorConfig
 import sapien.render
 import pytorch_kinematics as pk
 from furniture_bench.utils.sapien.urdf_loader import URDFLoader
@@ -18,8 +17,7 @@ from furniture_bench.utils.sapien import (
 from sapien.utils.viewer import Viewer
 import os
 import numpy as np
-import scipy
-import scipy.spatial
+from numpy.typing import NDArray
 
 from collections import defaultdict
 from typing import Dict, Union
@@ -43,7 +41,7 @@ from furniture_bench.furniture import furniture_factory
 from furniture_bench.config import ROBOT_HEIGHT, config
 from furniture_bench.utils.pose import get_mat, rot_mat
 from furniture_bench.envs.observation import (
-    DEFAULT_VISUAL_OBS,
+    DEFAULT_VISUAL_OBS,FULL_OBS
 )
 from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS, ROBOT_STATES
 from furniture_bench.furniture.parts.part import Part
@@ -66,9 +64,8 @@ ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_t
 
 
 # TODO:
-#      1. Camera Data Acquire
 #      2. Random Number Generator
-#      3. API to reset simualtion env
+#      3. API to reset simualtion env: reset_franka reset_parts, reset_env_to a a state
 #      4. RenderGroup for Parallel Rendering
 
 # NOTE(Yuke): 
@@ -80,9 +77,10 @@ class FurnitureEnv:
         self,
         furniture_name: str,
         num_envs: int = 1,
+        obs_keys: List[str] = None,
+        parts_poses_in_robot_frame:bool = False,
         headless: bool = False,
         parallel_in_single_scene: bool = False,
-        viewer:bool = False
     ):
         self.furniture_name = furniture_name
         self.num_envs = num_envs
@@ -106,7 +104,13 @@ class FurnitureEnv:
         self.max_gripper_width = config["robot"]["max_gripper_width"][
             self.furniture_name
         ]
-        self.obs_keys = {"color_image1" ,"color_image2" }
+        self.obs_keys = obs_keys or DEFAULT_VISUAL_OBS
+        self.include_parts_poses: bool = "parts_poses" in self.obs_keys
+        self.parts_poses_in_robot_frame = parts_poses_in_robot_frame
+
+        self.robot_state_keys = [
+            k.split("/")[1] for k in self.obs_keys if k.startswith("robot_state")
+        ]
 
         self.furnitures = [furniture_factory(self.furniture_name) for _ in range(num_envs)]
         if self.num_envs == 1:
@@ -129,10 +133,10 @@ class FurnitureEnv:
         # Predefined params to load objs, actors and articulations
         self.static_obj_dict: Dict[str, str] = {
             "base_tag": "furniture/urdf/base_tag.urdf",
-            "obstacle_left": "furniture/urdf/obstacle_side.urdf",
-            "obstacle_right": "furniture/urdf/obstacle_side.urdf",
-            "background": "furniture/urdf/background.urdf",
             "obstacle_front": "furniture/urdf/obstacle_front.urdf",
+            "obstacle_right": "furniture/urdf/obstacle_side.urdf",
+            "obstacle_left": "furniture/urdf/obstacle_side.urdf",
+            "background": "furniture/urdf/background.urdf",
             "table": "furniture/urdf/table.urdf",
         }
         # Pose setting of the scene in the simulation
@@ -149,7 +153,7 @@ class FurnitureEnv:
             [self.franka_pose.p[0], self.franka_pose.p[1], self.franka_pose.p[2]],
             [0, 0, 0],
         )
-        self.base_tag_from_robot_mat = config["robot"]["tag_base_from_robot_base"]
+        self.base_tag_from_robot_mat:NDArray[np.float32] = config["robot"]["tag_base_from_robot_base"]
 
 
         self.base_tag_pose = sapien.Pose()
@@ -236,7 +240,7 @@ class FurnitureEnv:
         # initializing Physx simulation scene on GPU (Load/Reset all qpos to the default qpos)
         self._init_sim()
 
-        if viewer:
+        if not self.headless:
             # viewer uses different pipeline
             self._init_viewer()
         else:
@@ -267,7 +271,8 @@ class FurnitureEnv:
             self.static_obj_builders[key] = generate_builder_with_options_(
                 self.urdf_loader, os.path.join(ASSET_ROOT, value), opts
             )
-            self.static_obj_builders[key].set_physx_body_type("static")
+            self.static_obj_builders[key].set_physx_body_type("kinematic")
+            # NOTE(Yuke): Use kinematic instead of static here, because it may reload objs at different position
             self.static_obj_builders[key].set_name(name=key)
 
         # Setup Config for objs
@@ -711,6 +716,16 @@ class FurnitureEnv:
         end_effector_pose[:,:3] -= self.physx_system.cuda_rigid_body_data.torch()[self.root_link_gpu_index, :3]
         return end_effector_pose
     
+    def get_ee_pose(self)->Tuple[torch.Tensor, torch.Tensor]:
+        """Obtain the pose of End Effector on GPU
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Position and Quaternion (xyzw)
+        """
+
+        ee_pose = self._get_ee_pose()
+        return ee_pose[:, :3], ee_pose[:, 3:7].roll(-1, dims=-1)
+    
     def get_ee_lin_vel(self)->torch.Tensor:
         ee_lin_vel = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
         ee_lin_vel[:] = self.physx_system.cuda_rigid_body_data.torch()[self.end_effector_gpu_index, 7:10]
@@ -759,7 +774,7 @@ class FurnitureEnv:
 
         gripper_width = qpos[:,7:8] + qpos[:,8:9]
 
-        return {
+        robot_state =  {
             "joint_positions":joint_positions,
             "joint_velocities": joint_velocities,
             "joint_torques":joint_torques,
@@ -771,6 +786,45 @@ class FurnitureEnv:
             "gripper_finger_1_pos": qpos[:, 7:8],
             "gripper_finger_2_pos": qpos[:, 8:9]
         }
+        return { key: robot_state[key] for key in self.robot_state_keys }
+    
+    def get_parts_poses(self, sim_coord=False, robot_coord=False):
+        """Get furniture parts poses in the AprilTag frame.
+
+        Args:
+            sim_coord: If True, return the poses in the simulator coordinate. Otherwise, return the poses in the AprilTag coordinate.
+
+        Returns:
+            parts_poses: (num_envs, num_parts * pose_dim). The poses of all parts in the AprilTag frame.
+            founds: (num_envs, num_parts). Always 1 since we don't use AprilTag for detection in simulation.
+        """
+
+        parts_poses = self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index_tensor, :7].clone()
+        # parts_poses Shape: (num_envs, num_parts, 7)
+        parts_poses[..., 3:7] = parts_poses[..., 3:7].roll(-1, dims=-1) # wxyz to xyzw
+        if sim_coord:
+            return parts_poses.reshape(self.num_envs, -1)
+
+        if robot_coord:
+            robot_coord_poses = self.sim_pose_to_robot_pose(parts_poses)
+            return robot_coord_poses.view(self.num_envs, -1)
+
+        april_coord_poses = self.sim_pose_to_april_pose(parts_poses)
+        parts_poses = april_coord_poses.view(self.num_envs, -1)
+
+        return parts_poses
+
+    def get_obstacle_pose(self, sim_coord=False, robot_coord=False):
+        obstacle_front_poses = self.physx_system.cuda_rigid_body_data.torch()[self.obstacle_gpu_index["obstacle_front"].unsqueeze(1), :7].clone()
+        obstacle_front_poses[..., 3:7] = obstacle_front_poses[..., 3:7].roll(-1, dims=-1)
+        if sim_coord:
+            return obstacle_front_poses.reshape(self.num_envs, -1)
+
+        if robot_coord:
+            robot_coord_poses = self.sim_pose_to_robot_pose(obstacle_front_poses)
+            return robot_coord_poses.view(self.num_envs, -1)
+        april_coord_poses = self.sim_pose_to_april_pose(obstacle_front_poses)
+        return april_coord_poses.view(self.num_envs, -1)
     
     def get_observation(self)->Dict[str, torch.Tensor]:
 
@@ -780,6 +834,17 @@ class FurnitureEnv:
         obs["robot_state"] = self.get_robot_state()
         if self.render_system_group is not None:
             obs.update(self.get_sensor_obs().items())
+
+        if self.include_parts_poses:
+            # Part poses in AprilTag.
+            parts_poses = self.get_parts_poses(
+                sim_coord=False, robot_coord=self.parts_poses_in_robot_frame
+            )
+            obstacle_poses = self.get_obstacle_pose(
+                sim_coord=False, robot_coord=self.parts_poses_in_robot_frame
+            )
+
+            obs["parts_poses"] = torch.cat([parts_poses, obstacle_poses], dim=1)
 
         return obs
 
@@ -796,10 +861,23 @@ class FurnitureEnv:
         # self.physx_system.gpu_fetch_rigid_dynamic_data()
         # self.physx_system.gpu_fetch_articulation_link_pose()
         self._fetch_all()
-        self.reset_parts()
+        self._config_parts()
         # set Vel of all actors to zero
         self.physx_system.cuda_rigid_body_data.torch()[:, 7:] = torch.zeros_like(self.physx_system.cuda_rigid_body_data.torch()[:, 7:])
-        self.reset_franka()
+        self._config_franka()
+        
+        self.obstacle_gpu_index = {
+            obj_name: torch.tensor(
+                [
+                    entity.find_component_by_type(
+                        sapien.physx.PhysxRigidDynamicComponent
+                    ).get_gpu_index()
+                    for entity in entities
+                ]
+            )
+            for obj_name, entities in self.static_obj_entites.items()
+            if obj_name.startswith("obstacle")
+        }
 
         self.physx_system.gpu_apply_rigid_dynamic_data()
         self.physx_system.gpu_apply_articulation_root_pose()
@@ -816,7 +894,7 @@ class FurnitureEnv:
         )
         self.ctrl_started = True
 
-    def reset_franka(self):
+    def _config_franka(self):
         # Since franka is fixed. No need to reset the root Pose
         self.franka_gpu_index = torch.tensor([frank_entity.get_gpu_index() for frank_entity in self.franka_entities],dtype=torch.int32, device=self.device)
         self.physx_system.cuda_articulation_qpos.torch()[self.franka_gpu_index, :self.franka_num_dof] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
@@ -839,7 +917,7 @@ class FurnitureEnv:
 
 
 
-    def reset_parts(self):
+    def _config_parts(self):
         self.parts_gpu_index:Dict[str, torch.Tensor] = {}
         for key, value in self.part_entities.items():
             part_gpu_index = torch.tensor([part_entity.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent).get_gpu_index() for part_entity in value]) 
@@ -848,7 +926,11 @@ class FurnitureEnv:
             part_pose_np[:] = self.part_default_pose[key]  # broadcast
             part_pose_np[:,:3] += self.scene_offsets_np
             self.physx_system.cuda_rigid_body_data.torch()[part_gpu_index, :7] = torch.from_numpy(part_pose_np).to(self.device)
-            
+        # self.parts_gpu_index_tensor: Shape (num_envs, num_parts)
+        self.parts_gpu_index_tensor = self.furniture_rb_indices = torch.stack(
+            [self.parts_gpu_index[part.name] for part in self.furniture.parts],
+            dim=0,
+        ).T
                 
     
     def step_viewer(self):
@@ -985,16 +1067,56 @@ class FurnitureEnv:
         if self.render_system_group is None:
             return
         self.render_system_group.update_render()
+
+    def sim_pose_to_april_pose(self, parts_poses:torch.Tensor)->torch.Tensor:
+        part_poses_mat = C.pose2mat_batched(
+            parts_poses[:, :, :3], parts_poses[:, :, 3:7], device=self.device
+        )
+
+        april_coord_poses_mat = self.sim_coord_to_april_coord(part_poses_mat)
+        april_coord_poses = torch.cat(C.mat2pose_batched(april_coord_poses_mat), dim=-1)
+        return april_coord_poses
         
+    def sim_pose_to_robot_pose(self, parts_poses:torch.Tensor)->torch.Tensor:
+        part_poses_mat = C.pose2mat_batched(
+            parts_poses[:, :, :3], parts_poses[:, :, 3:7], device=self.device
+        )
+
+        robot_coord_poses_mat = self.sim_coord_to_robot_coord(part_poses_mat)
+        robot_coord_poses = torch.cat(C.mat2pose_batched(robot_coord_poses_mat), dim=-1)
+        return robot_coord_poses
+
+    def sim_coord_to_robot_coord(self, sim_coord_mat:torch.Tensor)->torch.Tensor:
+        return self.sim_to_robot_mat @ sim_coord_mat
+    
+    def sim_coord_to_april_coord(self, sim_coord_mat:torch.Tensor)->torch.Tensor:
+        return self.sim_to_april_mat @ sim_coord_mat
 
     
-    def april_coord_to_sim_coord(self, april_coord_mat):
+    def april_coord_to_sim_coord(self, april_coord_mat:NDArray[np.float32])->NDArray[np.float32]:
         """Converts AprilTag coordinate to simulator base_tag coordinate."""
         return self.april_to_sim_mat @ april_coord_mat
     
     @property
-    def april_to_sim_mat(self):
+    def envs(self)->List[sapien.Scene]:
+        return self.scenes
+
+    
+    @property
+    def april_to_sim_mat(self)->NDArray[np.float32]:
         return self.franka_from_origin_mat @ self.base_tag_from_robot_mat
+    
+    @property
+    def sim_to_robot_mat(self)->torch.Tensor:
+        return torch.tensor(self.franka_from_origin_mat, device=self.device)
+
+    @property
+    def sim_to_april_mat(self)->torch.Tensor:
+        return torch.tensor(
+            np.linalg.inv(self.base_tag_from_robot_mat)
+            @ np.linalg.inv(self.franka_from_origin_mat),
+            device=self.device,
+        )
     
     @property
     def action_space(self):
@@ -1014,7 +1136,7 @@ class FurnitureEnv:
 
 if __name__=="__main__":
     sim_config["robot"]["gripper_torque"] = 0.002
-    sim = FurnitureEnv(furniture_name="lamp", num_envs=4, parallel_in_single_scene=False, viewer=True)
+    sim = FurnitureEnv(furniture_name="lamp", num_envs=4, parallel_in_single_scene=False, headless=False, obs_keys=FULL_OBS)
 
     # TODO: Currently please only use lamp for the simulation, since to use other furnitures
     #   file path change in the urdf file should be made.
@@ -1049,7 +1171,8 @@ if __name__=="__main__":
         if sim.time >= 4:
             action[:, -1] -= 0.001
             action[:, 0] -= 0.0005 * sim.dt
-        sim.step(action)
+        obs = sim.step(action)
+        print(list(obs.keys()))
     
         # This should be put after the step in which we first set target
         # sim.physx_system.step()
