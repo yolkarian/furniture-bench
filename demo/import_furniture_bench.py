@@ -65,8 +65,7 @@ ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_t
 
 # TODO:
 #      1. Random Number Generator
-#      2. API to reset simualtion env: reset_franka reset_parts, reset_env_to a a state
-#      3. No part Rendering Problem
+#      2. Test Reset APIs
 
 # NOTE(Yuke): 
 # 1. Currently no such shared collision shapes which can collide with elements in all Scenes.
@@ -80,12 +79,14 @@ class FurnitureEnv:
         obs_keys: List[str] = None,
         parts_poses_in_robot_frame:bool = False,
         headless: bool = False,
+        enable_sensor: bool = False,
         parallel_in_single_scene: bool = False,
     ):
         self.furniture_name = furniture_name
         self.num_envs = num_envs
         
         self.headless = headless
+        self.enable_sensor = enable_sensor
         self.parallel_in_single_scene = parallel_in_single_scene
         # assert self.parallel_in_single_scene
 
@@ -247,7 +248,7 @@ class FurnitureEnv:
             self._init_viewer()
         else:
             self.viewer = None
-        if not self.parallel_in_single_scene:
+        if not self.parallel_in_single_scene and self.enable_sensor :
             self._load_sensors()
             self._init_render()
 
@@ -428,7 +429,6 @@ class FurnitureEnv:
                 tmp_initial_p = self.ground_builder.initial_pose.p.copy()
                 self.ground_builder.set_name(f"scene_{i}_{tmp_name}")
                 self.ground_builder.initial_pose.set_p(scene_offset + tmp_initial_p)
-
             self.ground_builder.build()
             if self.parallel_in_single_scene:
                 self.ground_builder.set_name(tmp_name)
@@ -533,7 +533,7 @@ class FurnitureEnv:
                 direct_light = sapien.render.RenderDirectionalLightComponent()    
                 entity.add_component(direct_light)
                 direct_light.set_color(light["color"])
-                light_position = self.scene_offsets_np[0]
+                light_position = np.zeros(3, dtype=np.float32)  # TODO: to modify
                 direct_light.set_entity_pose(sapien.Pose(
                     light_position, sapien.math.shortest_rotation([1, 0, 0], light["direction"])
                 ))
@@ -692,8 +692,8 @@ class FurnitureEnv:
                 link.entity.find_component_by_type(sapien.render.RenderBodyComponent),
                 link.gpu_pose_index,
             )
-            for frank_entity in self.franka_entities
-            for link in frank_entity.links
+            for franka_entity in self.franka_entities
+            for link in franka_entity.links
         ]
 
         return render_bodies
@@ -803,7 +803,8 @@ class FurnitureEnv:
         """
         # TODO: the scene offset should also be considered here
         parts_poses = self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index_tensor, :7].clone()
-        parts_poses[..., :3] -= self.scene_offsets_torch.unsqueeze(1)
+        if self.parallel_in_single_scene:
+            parts_poses[..., :3] -= self.scene_offsets_torch.unsqueeze(1)
         # parts_poses Shape: (num_envs, num_parts, 7)
         parts_poses[..., 3:7] = parts_poses[..., 3:7].roll(-1, dims=-1) # wxyz to xyzw
         if sim_coord:
@@ -822,7 +823,8 @@ class FurnitureEnv:
         # TODO: the scene offset should also be considered here
         obstacle_front_poses = self.physx_system.cuda_rigid_body_data.torch()[self.obstacle_gpu_index["obstacle_front"].unsqueeze(1), :7].clone()
         # NOTE:(Yuke) offset should also be considered
-        obstacle_front_poses[..., :3] -= self.scene_offsets_torch.unsqueeze(1)
+        if self.parallel_in_single_scene:
+            obstacle_front_poses[..., :3] -= self.scene_offsets_torch.unsqueeze(1)
         obstacle_front_poses[..., 3:7] = obstacle_front_poses[..., 3:7].roll(-1, dims=-1) 
         if sim_coord:
             return obstacle_front_poses.reshape(self.num_envs, -1)
@@ -931,7 +933,8 @@ class FurnitureEnv:
             self.parts_gpu_index[key] = part_gpu_index
             part_pose_np = np.zeros((self.num_envs, 7), dtype=np.float32)
             part_pose_np[:] = self.part_default_pose[key]  # broadcast
-            part_pose_np[:,:3] += self.scene_offsets_np
+            if self.parallel_in_single_scene:
+                part_pose_np[:,:3] += self.scene_offsets_np
             self.physx_system.cuda_rigid_body_data.torch()[part_gpu_index, :7] = torch.from_numpy(part_pose_np).to(self.device)
         # self.parts_gpu_index_tensor: Shape (num_envs, num_parts)
         self.parts_gpu_index_tensor = self.furniture_rb_indices = torch.stack(
@@ -1007,9 +1010,14 @@ class FurnitureEnv:
             idxs = self.parts_gpu_index[part.name][env_idx]
 
             # Load the Pose into buffer (offset)
-            self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = torch.tensor(
-                part_pose.p + self.scene_offsets_np[env_idx], device=self.device
-            )
+            if self.parallel_in_single_scene:
+                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = torch.tensor(
+                    part_pose.p + self.scene_offsets_np[env_idx], device=self.device
+                )
+            else:
+                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = torch.tensor(
+                    part_pose.p, device=self.device
+                )
             self.physx_system.cuda_rigid_body_data.torch()[idxs, 3:7] = torch.tensor(
                 part_pose.q,
                 device=self.device,
@@ -1038,17 +1046,30 @@ class FurnitureEnv:
         obstacle_left_offset = np.array((-0.075, 0.175, 0), dtype=np.float32)
 
         # Write the obstacle poses to the root_pos and root_quat tensors
-        self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_front"][env_idx], :3] = torch.from_numpy(
-            obstacle_pose.p + self.scene_offsets_np[env_idx]
-        ).to(torch.float32,device=self.device)
+        if self.parallel_in_single_scene:
+            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_front"][env_idx], :3] = torch.from_numpy(
+                obstacle_pose.p + self.scene_offsets_np[env_idx]
+            ).to(torch.float32,device=self.device)
 
-        self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_right"][env_idx], :3] = torch.from_numpy(
-            obstacle_pose.p + obstacle_right_offset + self.scene_offsets_np[env_idx]
-        ).to(torch.float32,device=self.device)
+            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_right"][env_idx], :3] = torch.from_numpy(
+                obstacle_pose.p + obstacle_right_offset + self.scene_offsets_np[env_idx]
+            ).to(torch.float32,device=self.device)
 
-        self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_left"][env_idx], :3] = torch.from_numpy(
-            obstacle_pose.p + obstacle_left_offset + self.scene_offsets_np[env_idx]
-        ).to(torch.float32,device=self.device)
+            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_left"][env_idx], :3] = torch.from_numpy(
+                obstacle_pose.p + obstacle_left_offset + self.scene_offsets_np[env_idx]
+            ).to(torch.float32,device=self.device)
+        else:
+            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_front"][env_idx], :3] = torch.from_numpy(
+                obstacle_pose.p
+            ).to(torch.float32,device=self.device)
+
+            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_right"][env_idx], :3] = torch.from_numpy(
+                obstacle_pose.p + obstacle_right_offset 
+            ).to(torch.float32,device=self.device)
+
+            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_left"][env_idx], :3] = torch.from_numpy(
+                obstacle_pose.p + obstacle_left_offset 
+            ).to(torch.float32,device=self.device)
 
         # Quaternion unused
 
@@ -1262,7 +1283,7 @@ class FurnitureEnv:
 
 if __name__=="__main__":
     sim_config["robot"]["gripper_torque"] = 0.002
-    sim = FurnitureEnv(furniture_name="one_leg", num_envs=4, parallel_in_single_scene=True, headless=False, obs_keys=FULL_OBS)
+    sim = FurnitureEnv(furniture_name="one_leg", num_envs=4, parallel_in_single_scene=False, headless=False, obs_keys=FULL_OBS, enable_sensor=False)
 
     # TODO: Currently please only use lamp for the simulation, since to use other furnitures
     #   file path change in the urdf file should be made.
