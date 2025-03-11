@@ -29,6 +29,7 @@ from furniture_bench.utils.recorder import VideoRecorder
 import torch
 import gymnasium as gym
 import numpy as np
+import scipy.spatial
 
 import furniture_bench.utils.transform as T
 import furniture_bench.controllers.control_utils as C
@@ -66,6 +67,8 @@ ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_t
 # TODO:
 #      1. Random Number Generator
 #      2. Test Reset APIs
+#      3. No randomness of obstacle, given that the full observations include the pose of obstacles
+#      4. Add Tests
 
 # NOTE(Yuke): 
 # 1. Currently no such shared collision shapes which can collide with elements in all Scenes.
@@ -97,7 +100,7 @@ class FurnitureEnv:
         self.stiffness = 1000.00
         self.damping = 200.0
         self.restitution = 0.5
-        self.init_assembled:bool = False
+        self.init_assembled:bool = False  # If true, the environment is initialized and reset without randomness
         self.randomness = Randomness.LOW
         self.pos_scalar:float = 1.0
         self.rot_scalar:float = 1.0
@@ -166,7 +169,7 @@ class FurnitureEnv:
         )
         self.base_tag_pose.p[2] = table_surface_z
 
-        self.obstacle_front_pose = sapien.Pose()
+        self.obstacle_front_pose = sapien.Pose()  # in Sim Coordinate
         self.obstacle_front_pose.p = np.array(
             [self.base_tag_pose.p[0] + 0.37 + 0.01, 0.0, table_surface_z + 0.015],
             dtype=np.float32,
@@ -357,7 +360,7 @@ class FurnitureEnv:
                 [part_pose_mat[0, 3], part_pose_mat[1, 3], part_pose_mat[2, 3]]
             )
             reset_ori = self.april_coord_to_sim_coord(ori)
-            part_pose.set_q(np.roll(np.array(T.mat2quat(reset_ori[:3, :3]),dtype=np.float32), 1, axis=-1))
+            part_pose.set_q(np.roll(T.mat2quat(reset_ori[:3, :3]), 1, axis=-1).astype(np.float32))
             part_builder.set_initial_pose(part_pose)
             part_pose_np = np.zeros(7, dtype=np.float32)
 
@@ -820,9 +823,8 @@ class FurnitureEnv:
         return parts_poses
 
     def get_obstacle_pose(self, sim_coord=False, robot_coord=False):
-        # TODO: the scene offset should also be considered here
         obstacle_front_poses = self.physx_system.cuda_rigid_body_data.torch()[self.obstacle_gpu_index["obstacle_front"].unsqueeze(1), :7].clone()
-        # NOTE:(Yuke) offset should also be considered
+        # NOTE:(Yuke) offset should also be considered only in parallel in single scene mode
         if self.parallel_in_single_scene:
             obstacle_front_poses[..., :3] -= self.scene_offsets_torch.unsqueeze(1)
         obstacle_front_poses[..., 3:7] = obstacle_front_poses[..., 3:7].roll(-1, dims=-1) 
@@ -942,6 +944,47 @@ class FurnitureEnv:
             dim=0,
         ).T
 
+    def reset(self):
+        print("In orignal reset")
+        for i in range(self.num_envs):
+            self.reset_env(i)
+        self.physx_system.step()
+        self._fetch_all()
+        self.update_render()
+        obs = self.get_observation()
+
+        self.reward = torch.zeros((self.num_envs, 1), dtype=torch.float32)
+        self.done = torch.zeros((self.num_envs, 1), dtype=torch.bool)
+
+        return obs
+
+    def reset_env_to(self, env_idx:int, state:dict):
+        """Reset to a specific state. **MUST refresh in between multiple calls
+        to this function to have changes properly reflected in each environment.
+        Also might want to set a zero-torque action via .set_dof_actuation_force_tensor
+        to avoid additional movement**
+
+        Args:
+            env_idx:int: Environment index.
+            state: A dict containing the state of the environment.
+        """
+        self.furnitures[env_idx].reset()
+        dof_pos = np.concatenate(
+            [
+                state["robot_state"]["joint_positions"],
+                np.array(
+                    [
+                        state["robot_state"]["gripper_finger_1_pos"],
+                        state["robot_state"]["gripper_finger_2_pos"],
+                    ]
+                ),
+            ],
+        )
+
+        self._reset_franka(env_idx, torch.from_numpy(dof_pos).to(dtype=torch.float32, device=self.device))
+        self._reset_parts(env_idx, state["parts_poses"])
+        self.env_steps[env_idx] = 0
+
     def reset_env(self, env_idx:int, reset_franka:bool=True, reset_parts:bool = True):
         """Reset the environment
 
@@ -950,7 +993,7 @@ class FurnitureEnv:
             reset_franka (bool, optional): Whether to reset franka robot or not. Defaults to True.
             reset_parts (bool, optional): Whether to reset the part poses. Defaults to True.
         """
-        furniture:Furniture = self.furniture[env_idx]
+        furniture:Furniture = self.furnitures[env_idx]
         furniture.reset()
         if self.randomness == Randomness.LOW and not self.init_assembled:
             furniture.randomize_init_pose(
@@ -975,7 +1018,7 @@ class FurnitureEnv:
 
     def _reset_franka(self, env_idx:Optional[int]=None, dof_pos:Optional[torch.Tensor] = None):
         if dof_pos is None:
-            dof_pos = torch.from_numpy(self.franka_default_dof_pos).to(torch.float32, device=self.device)
+            dof_pos = torch.from_numpy(self.franka_default_dof_pos).to(dtype=torch.float32, device=self.device)
         if env_idx is None:
             franka_gpu_index = self.franka_gpu_index
         else:
@@ -983,13 +1026,23 @@ class FurnitureEnv:
         self.physx_system.cuda_articulation_qpos.torch()[franka_gpu_index, :self.franka_num_dof] = dof_pos
         self.physx_system.cuda_articulation_qvel.torch()[franka_gpu_index, :self.franka_num_dof] = torch.zeros_like(self.physx_system.cuda_articulation_qvel.torch()[franka_gpu_index, :self.franka_num_dof], device=self.device)
 
+        # Set the target as well, for PD controller
+        self.physx_system.cuda_articulation_target_qpos.torch()[franka_gpu_index, :self.franka_num_dof] = dof_pos
+        self.physx_system.cuda_articulation_target_qvel.torch()[franka_gpu_index, :self.franka_num_dof] = torch.zeros_like(self.physx_system.cuda_articulation_target_qvel.torch()[franka_gpu_index, :self.franka_num_dof], device=self.device)
+        self.physx_system.cuda_articulation_qf.torch()[franka_gpu_index, :self.franka_num_dof] = torch.zeros_like(self.physx_system.cuda_articulation_qf.torch()[franka_gpu_index, :self.franka_num_dof], device=self.device)
         # Apply Changes
         self.physx_system.gpu_apply_articulation_qpos()
         self.physx_system.gpu_apply_articulation_qvel()
         self.physx_system.gpu_update_articulation_kinematics()
+        self.physx_system.gpu_apply_articulation_qf()
+        self.physx_system.gpu_apply_articulation_root_pose()
+        self.physx_system.gpu_apply_articulation_root_velocity()
+        self.physx_system.gpu_apply_articulation_target_position()
+        self.physx_system.gpu_apply_articulation_target_velocity()
 
-    def _reset_parts(self, env_idx:int, parts_poses:Optional[torch.Tensor] = None, skip_set_state:bool=False):
-        """Resets furniture parts to the initial pose."""
+    def _reset_parts(self, env_idx:int, parts_poses:Optional[np.ndarray] = None, skip_set_state:bool=False):
+        """Resets furniture parts to the initial pose.
+        part_poses: quaternion wxyz"""
         for part_idx, part in enumerate(self.furnitures[env_idx].parts):
             # Use the given pose.
             if parts_poses is not None:
@@ -997,16 +1050,20 @@ class FurnitureEnv:
 
                 pos = part_pose[:3]
                 ori = T.to_homogeneous(
-                    [0, 0, 0], T.quat2mat(part_pose[3:])
+                    [0, 0, 0], T.quat2mat(np.roll(part_pose[3:], shift=-1, axis=-1))
                 )  # Dummy zero position.
             else:
                 pos, ori = self._get_reset_pose_part(part)
 
+            # NOTE(Yuke): recalculation instead of directly using self.part_default_pose,
+            #          since self._get_reset_pose_part can obtain pos and ori with randomness
             part_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
             part_pose = sapien.Pose()
-            part_pose.set_p([part_pose_mat[0, 3], part_pose_mat[1, 3], part_pose_mat[2, 3]])
+            part_pose.set_p(
+                [part_pose_mat[0, 3], part_pose_mat[1, 3], part_pose_mat[2, 3]]
+            )
             reset_ori = self.april_coord_to_sim_coord(ori)
-            part_pose.set_q(np.roll(T.mat2quat(reset_ori[:3, :3]),shift=1, axis=-1).astype(np.float32))
+            part_pose.set_q(np.roll(T.mat2quat(reset_ori[:3, :3]), 1, axis=-1).astype(np.float32))
             idxs = self.parts_gpu_index[part.name][env_idx]
 
             # Load the Pose into buffer (offset)
@@ -1022,54 +1079,55 @@ class FurnitureEnv:
                 part_pose.q,
                 device=self.device,
             )
+            # linear vel and rot vel to zero
+            self.physx_system.cuda_rigid_body_data.torch()[idxs, 7:] = 0
 
         # Get the obstacle poses, last 7 numbers in the parts_poses tensor
         if parts_poses is not None:
             obstacle_pose = parts_poses[-7:]
             pos = obstacle_pose[:3]
             ori = T.to_homogeneous([0, 0, 0], T.quat2mat(obstacle_pose[3:]))
+            # Convert the obstacle pose from AprilTag to simulator coordinate system
+            obstacle_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
+            obstacle_pose = sapien.Pose()
+            obstacle_pose.set_p((
+                obstacle_pose_mat[0, 3], obstacle_pose_mat[1, 3], obstacle_pose_mat[2, 3]
+            ))
+            reset_ori = self.april_coord_to_sim_coord(ori)
+            obstacle_pose.set_q(np.roll(T.mat2quat(reset_ori[:3, :3]), shift=1, axis=-1).astype(np.float32))
         else:
-            pos = self.obstacle_front_pose.p
-            ori = self.obstacle_front_pose.q
-
-        # Convert the obstacle pose from AprilTag to simulator coordinate system
-        obstacle_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
-        obstacle_pose = sapien.Pose()
-        obstacle_pose.set_p((
-            obstacle_pose_mat[0, 3], obstacle_pose_mat[1, 3], obstacle_pose_mat[2, 3]
-        ))
-        reset_ori = self.april_coord_to_sim_coord(ori)
-        obstacle_pose.set_q(np.roll(T.mat2quat(reset_ori[:3, :3]), shift=1, axis=-1).astype(np.float32))
-
+            obstacle_pose = self.obstacle_front_pose
+            
         # Calculate the offsets for the front and side obstacles
         obstacle_right_offset = np.array((-0.075, -0.175, 0),dtype=np.float32)
         obstacle_left_offset = np.array((-0.075, 0.175, 0), dtype=np.float32)
 
-        # Write the obstacle poses to the root_pos and root_quat tensors
+
+        # Write to GPU buffer. Since obstacles are static objects, no need to reset velocity
         if self.parallel_in_single_scene:
-            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_front"][env_idx], :3] = torch.from_numpy(
+            self.physx_system.cuda_rigid_body_data.torch()[self.obstacle_gpu_index["obstacle_front"][env_idx], :3] = torch.from_numpy(
                 obstacle_pose.p + self.scene_offsets_np[env_idx]
-            ).to(torch.float32,device=self.device)
+            ).to(dtype=torch.float32,device=self.device)
 
-            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_right"][env_idx], :3] = torch.from_numpy(
+            self.physx_system.cuda_rigid_body_data.torch()[self.obstacle_gpu_index["obstacle_right"][env_idx], :3] = torch.from_numpy(
                 obstacle_pose.p + obstacle_right_offset + self.scene_offsets_np[env_idx]
-            ).to(torch.float32,device=self.device)
+            ).to(dtype=torch.float32,device=self.device)
 
-            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_left"][env_idx], :3] = torch.from_numpy(
+            self.physx_system.cuda_rigid_body_data.torch()[self.obstacle_gpu_index["obstacle_left"][env_idx], :3] = torch.from_numpy(
                 obstacle_pose.p + obstacle_left_offset + self.scene_offsets_np[env_idx]
-            ).to(torch.float32,device=self.device)
+            ).to(dtype=torch.float32,device=self.device)
         else:
-            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_front"][env_idx], :3] = torch.from_numpy(
+            self.physx_system.cuda_rigid_body_data.torch()[self.obstacle_gpu_index["obstacle_front"][env_idx], :3] = torch.from_numpy(
                 obstacle_pose.p
-            ).to(torch.float32,device=self.device)
+            ).to(dtype=torch.float32,device=self.device)
 
-            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_right"][env_idx], :3] = torch.from_numpy(
+            self.physx_system.cuda_rigid_body_data.torch()[self.obstacle_gpu_index["obstacle_right"][env_idx], :3] = torch.from_numpy(
                 obstacle_pose.p + obstacle_right_offset 
-            ).to(torch.float32,device=self.device)
+            ).to(dtype=torch.float32,device=self.device)
 
-            self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index["obstacle_left"][env_idx], :3] = torch.from_numpy(
+            self.physx_system.cuda_rigid_body_data.torch()[self.obstacle_gpu_index["obstacle_left"][env_idx], :3] = torch.from_numpy(
                 obstacle_pose.p + obstacle_left_offset 
-            ).to(torch.float32,device=self.device)
+            ).to(dtype=torch.float32,device=self.device)
 
         # Quaternion unused
 
@@ -1283,6 +1341,7 @@ class FurnitureEnv:
 
 if __name__=="__main__":
     sim_config["robot"]["gripper_torque"] = 0.002
+    is_reset = True
     sim = FurnitureEnv(furniture_name="one_leg", num_envs=4, parallel_in_single_scene=False, headless=False, obs_keys=FULL_OBS, enable_sensor=False)
 
     # TODO: Currently please only use lamp for the simulation, since to use other furnitures
@@ -1298,7 +1357,7 @@ if __name__=="__main__":
 
         # # Random Policy for gripper
         # # Gripper is directly controlled with force
-        # noise = np.random.rand(*action.shape)  - 0.5
+        # noise = np.random.r        # print(obs["parts_poses"].cpu().numpy()[:, -7:-4])and(*action.shape)  - 0.5
         # noise[:, :-2] = 0
         # action_np = action
 
@@ -1315,9 +1374,13 @@ if __name__=="__main__":
         # sim.physx_system.gpu_apply_articulation_qf()
         # sim.physx_system.gpu_apply_articulation_target_position()
         # # sim.physx_system.gpu_apply_articulation_target_velocity()
-        if sim.time >= 4:
-            action[:, -1] -= 0.001
-            action[:, 0] -= 0.0005 * sim.dt
+        # if sim.time >= 4:
+        #     action[:, -1] -= 0.001
+        #     action[:, 0] -= 0.0005 * sim.dt
+
+        if sim.time >= 2 and is_reset :
+            sim.reset()
+            is_reset = False
         obs = sim.step(action)
         print(obs["parts_poses"].cpu().numpy()[:, -7:-4])
     
