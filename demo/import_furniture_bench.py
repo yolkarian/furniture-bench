@@ -28,8 +28,6 @@ from furniture_bench.furniture.furniture import Furniture
 from furniture_bench.utils.recorder import VideoRecorder
 import torch
 import gymnasium as gym
-import numpy as np
-import scipy.spatial
 
 import furniture_bench.utils.transform as T
 import furniture_bench.controllers.control_utils as C
@@ -65,37 +63,124 @@ ASSET_ROOT = str(Path(__file__).parent.parent / "furniture_bench" / "assets_no_t
 
 
 # TODO:
-#      1. Random Number Generator
-#      2. Test Reset APIs
-#      3. No randomness of obstacle, given that the full observations include the pose of obstacles
-#      4. Add Tests
+#      1. Test Reset_env)ti APIs 
+#      2. Add randomness of obstacle, given that the full observations include the pose of obstacles
+#      3. Add Tests
 
 # NOTE(Yuke): 
 # 1. Currently no such shared collision shapes which can collide with elements in all Scenes.
 # 2. Some actors do not contain collision mesh.
 
-class FurnitureEnv:
+class FurnitureSimEnv(gym.Env):
     def __init__(
         self,
-        furniture_name: str,
+        furniture: str,
         num_envs: int = 1,
         obs_keys: List[str] = None,
-        parts_poses_in_robot_frame:bool = False,
+        parts_poses_in_robot_frame:bool = False, # Or Apriltag Frame
+        randomness: Union[str, Randomness] = "low",
         headless: bool = False,
         enable_sensor: bool = False,
+        ctrl_mode:Literal["diffik"] = "diffik",
         parallel_in_single_scene: bool = False,
+        enable_reward:bool = False,
+        **kwargs:dict
     ):
-        self.furniture_name = furniture_name
+        self.furniture_name = furniture
         self.num_envs = num_envs
-        
+        self.obs_keys = obs_keys or DEFAULT_VISUAL_OBS
+        self.parts_poses_in_robot_frame = parts_poses_in_robot_frame
+        self.randomness = str_to_enum(randomness)
         self.headless = headless
         self.enable_sensor = enable_sensor
         self.parallel_in_single_scene = parallel_in_single_scene
-        # assert self.parallel_in_single_scene
-
-        # Predefined parameters
+        self.ctrl_mode = ctrl_mode
         self.device = torch.device("cuda")
         self.sapien_device = sapien.Device(self.device.type)
+        assert self.ctrl_mode == "diffik"
+
+        if self.randomness == Randomness.LOW:
+            self.max_force_magnitude = 0.2
+            self.max_torque_magnitude = 0.007
+            self.max_obstacle_offset = 0.02
+            self.franka_joint_rand_lim_deg = np.radians(5)
+        elif self.randomness == Randomness.MEDIUM:
+            self.max_force_magnitude = 0.5
+            self.max_torque_magnitude = 0.01
+            self.max_obstacle_offset = 0.04
+            self.franka_joint_rand_lim_deg = np.radians(10)
+        elif self.randomness == Randomness.HIGH:
+            self.max_force_magnitude = 0.75
+            self.max_torque_magnitude = 0.015
+            self.max_obstacle_offset = 0.06
+            self.franka_joint_rand_lim_deg = np.radians(13)
+        else:
+            raise ValueError("Invalid randomness level")
+        
+        print(
+            f"Max force magnitude: {self.max_force_magnitude} "
+            f"Max torque magnitude: {self.max_torque_magnitude} "
+            f"Obstacle range: {self.max_obstacle_offset} "
+            f"Franka joint randomization limit: {self.franka_joint_rand_lim_deg}"
+        )
+        super(FurnitureSimEnv, self).__init__()
+        if self.furniture_name == "one_leg":
+            force_mul = [25, 1, 1, 1, 1]
+            torque_mul = [70, 1, 1, 1, 1]
+        elif self.furniture_name == "lamp":
+            force_mul = [8, 15, 30]
+            torque_mul = [16, 20, 60]
+        elif self.furniture_name == "round_table":
+            force_mul = [30, 4, 20]
+            torque_mul = [60, 4, 10]
+        elif self.furniture_name == "square_table":
+            force_mul = [25, 1, 1, 1, 1]
+            torque_mul = [70, 1, 1, 1, 1]
+        elif self.furniture_name == "mug_rack":
+            force_mul = [50, 20]
+            torque_mul = [150, 30]
+        elif self.furniture_name == "factory_peg_hole":
+            force_mul = [0.001, 0.001]
+            torque_mul = [0.001, 0.001]
+        elif self.furniture_name == "factory_nut_bolt":
+            force_mul = [0.001, 0.001]
+            torque_mul = [0.001, 0.001]
+        else:
+            raise ValueError(
+                f"Have not set up the random force/torque multipliers for furniture {self.furniture_name}"
+            )
+        
+        print(f"Force multiplier: {force_mul}")
+        print(f"Torque multiplier: {torque_mul}")
+
+        self.force_multiplier = torch.tensor(force_mul, device=self.device).unsqueeze(
+            -1
+        )
+        self.torque_multiplier = torch.tensor(torque_mul, device=self.device).unsqueeze(
+            -1
+        )
+
+        # Pair for the reward computation
+        if self.furniture_name == "one_leg":
+            self.pairs_to_assemble = [(0, 4)]
+        elif self.furniture_name == "lamp":
+            self.pairs_to_assemble = [(0, 1), (0, 2)]
+        elif self.furniture_name == "round_table":
+            self.pairs_to_assemble = [(0, 1), (1, 2)]
+        elif self.furniture_name == "square_table":
+            self.pairs_to_assemble = [(0, 1), (0, 2), (0, 3), (0, 4)]
+        elif self.furniture_name == "mug_rack":
+            self.pairs_to_assemble = [(0, 1)]
+        elif self.furniture_name == "factory_peg_hole":
+            self.pairs_to_assemble = [(0, 1)]
+        elif self.furniture_name == "factory_nut_bolt":
+            self.pairs_to_assemble = [(0, 1)]
+        else:
+            raise ValueError(
+                f"Have not set up the pairs to assemble for furniture {self.furniture_name}"
+            )
+
+        # Predefined parameters
         self.pose_dim = 7
         self.stiffness = 1000.00
         self.damping = 200.0
@@ -110,9 +195,10 @@ class FurnitureEnv:
         self.max_gripper_width = config["robot"]["max_gripper_width"][
             self.furniture_name
         ]
-        self.obs_keys = obs_keys or DEFAULT_VISUAL_OBS
+
+        
         self.include_parts_poses: bool = "parts_poses" in self.obs_keys
-        self.parts_poses_in_robot_frame = parts_poses_in_robot_frame
+        
 
         self.robot_state_keys = [
             k.split("/")[1] for k in self.obs_keys if k.startswith("robot_state")
@@ -257,7 +343,6 @@ class FurnitureEnv:
 
 
         # TODO: Set up Random Number Generator here to ensure the determinism
-        # TODO: Clear some redundant simulation info at the beginning (velocity infomation of rigid bodies and articulations including links and joints)
         # TODO: Controller Reset (if we use self-implemented controller)
         self._init_ctrl()
 
@@ -536,7 +621,7 @@ class FurnitureEnv:
                 direct_light = sapien.render.RenderDirectionalLightComponent()    
                 entity.add_component(direct_light)
                 direct_light.set_color(light["color"])
-                light_position = np.zeros(3, dtype=np.float32)  # TODO: to modify
+                light_position = np.zeros(3, dtype=np.float32) 
                 direct_light.set_entity_pose(sapien.Pose(
                     light_position, sapien.math.shortest_rotation([1, 0, 0], light["direction"])
                 ))
@@ -546,9 +631,8 @@ class FurnitureEnv:
                 if self.parallel_in_single_scene:
                     break
     def _load_sensors(self):
-        # TODO: sensor data loading
         self.sensors:Dict[str, List[sapien.render.RenderBodyComponent]] = {}
-        self.sensor_keys: Dict[str, Set[str]] = {} # TODO
+        self.sensor_keys: Dict[str, Set[str]] = {} 
         # camera_obs = {}
         # This camera can access depth information as well
         def create_camera(name:str, i:int)->sapien.render.RenderCameraComponent:\
@@ -601,7 +685,6 @@ class FurnitureEnv:
             return camera
         
         self.camera_names_dict = {"1":"wrist", "2":"front"}
-        # TODO: Add picture name according to the obs_keys
 
         if not self.parallel_in_single_scene:
             for i, scene in enumerate(self.scenes):
@@ -804,7 +887,6 @@ class FurnitureEnv:
             parts_poses: (num_envs, num_parts * pose_dim). The poses of all parts in the AprilTag frame.
             founds: (num_envs, num_parts). Always 1 since we don't use AprilTag for detection in simulation.
         """
-        # TODO: the scene offset should also be considered here
         parts_poses = self.physx_system.cuda_rigid_body_data.torch()[self.parts_gpu_index_tensor, :7].clone()
         if self.parallel_in_single_scene:
             parts_poses[..., :3] -= self.scene_offsets_torch.unsqueeze(1)
@@ -841,7 +923,6 @@ class FurnitureEnv:
 
         obs = {}
 
-        # TODO(Yuke): make it possible to choose which state to read
         obs["robot_state"] = self.get_robot_state()
         if self.render_system_group is not None:
             obs.update(self.get_sensor_obs().items())
@@ -957,6 +1038,11 @@ class FurnitureEnv:
         self.done = torch.zeros((self.num_envs, 1), dtype=torch.bool)
 
         return obs
+    
+    def refresh(self):
+        self._fetch_all()
+        self.update_render()
+            
 
     def reset_env_to(self, env_idx:int, state:dict):
         """Reset to a specific state. **MUST refresh in between multiple calls
@@ -1176,8 +1262,8 @@ class FurnitureEnv:
         return jacobian_ee
     
     @torch.no_grad()
-    def step(self, action:torch.Tensor)->Dict[str,torch.Tensor]:
-        # TODO: add observation data
+    def step(self, action:torch.Tensor, sample_perturbations:bool = False)->Dict[str,torch.Tensor]:
+        # TODO: Reward and Info Calculation
         obs = self.get_observation()
         self.update_action(action)
         self._apply_all()
@@ -1273,6 +1359,9 @@ class FurnitureEnv:
             return
         self.render_system_group.update_render()
 
+    def gripper_width(self)->torch.Tensor:
+        return self.physx_system.cuda_articulation_qpos.torch()[:,7:8] - self.physx_system.cuda_articulation_qpos.torch()[:,8:9]
+
     def sim_pose_to_april_pose(self, parts_poses:torch.Tensor)->torch.Tensor:
         part_poses_mat = C.pose2mat_batched(
             parts_poses[:, :, :3], parts_poses[:, :, 3:7], device=self.device
@@ -1302,10 +1391,10 @@ class FurnitureEnv:
         """Converts AprilTag coordinate to simulator base_tag coordinate."""
         return self.april_to_sim_mat @ april_coord_mat
     
+    
     @property
     def envs(self)->List[sapien.Scene]:
         return self.scenes
-
     
     @property
     def april_to_sim_mat(self)->NDArray[np.float32]:
@@ -1342,9 +1431,9 @@ class FurnitureEnv:
 if __name__=="__main__":
     sim_config["robot"]["gripper_torque"] = 0.002
     is_reset = True
-    sim = FurnitureEnv(furniture_name="one_leg", num_envs=4, parallel_in_single_scene=False, headless=False, obs_keys=FULL_OBS, enable_sensor=False)
+    sim = FurnitureSimEnv(furniture="one_leg", num_envs=4, parallel_in_single_scene=False, headless=False, obs_keys=FULL_OBS, enable_sensor=False)
 
-    # TODO: Currently please only use lamp for the simulation, since to use other furnitures
+    # TODO: Currently please only use lamp/one_leg for the simulation, since to use other furnitures
     #   file path change in the urdf file should be made.
     action = sim.franka_default_dof_pos[None,:].repeat(sim.num_envs,axis = 0)
     sim.action_type = 1
