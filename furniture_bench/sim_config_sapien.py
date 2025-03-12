@@ -1,7 +1,6 @@
 """Define additional parameters based on real-world config for simulator."""
 from dataclasses import dataclass
 
-import sapien
 import numpy as np
 from numpy.typing import NDArray
 from typing import Optional

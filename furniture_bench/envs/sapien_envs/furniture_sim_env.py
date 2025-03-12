@@ -80,12 +80,15 @@ class FurnitureSimEnv(gym.Env):
         parts_poses_in_robot_frame:bool = False, # Or Apriltag Frame
         randomness: Union[str, Randomness] = "low",
         headless: bool = False,
-        enable_sensor: bool = False,
+        enable_sensor: bool = True,
+        action_type:Literal["delta", "pos"] = "pos",
         ctrl_mode:Literal["diffik"] = "diffik",
         parallel_in_single_scene: bool = False,
+        manual_done:bool = False,
         enable_reward:bool = False,
         **kwargs:dict
     ):
+        print(ASSET_ROOT)
         self.furniture_name = furniture
         self.num_envs = num_envs
         self.obs_keys = obs_keys or DEFAULT_VISUAL_OBS
@@ -94,6 +97,7 @@ class FurnitureSimEnv(gym.Env):
         self.headless = headless
         self.enable_sensor = enable_sensor
         self.parallel_in_single_scene = parallel_in_single_scene
+        self.manual_done = manual_done
         self.ctrl_mode = ctrl_mode
         self.device = torch.device("cuda")
         self.sapien_device = sapien.Device(self.device.type)
@@ -189,14 +193,13 @@ class FurnitureSimEnv(gym.Env):
         self.randomness = Randomness.LOW
         self.pos_scalar:float = 1.0
         self.rot_scalar:float = 1.0
-        self.action_type:Literal[0, 1] = 0  # 0: pos mode, 1: delta mode
+        self.__action_type:Literal[0, 1] = 0 if action_type == "pos" else 1  # 0: pos mode, 1: delta mode
         self.last_grasp = torch.tensor([-1.0] * num_envs, device=self.device)
         self.grasp_margin = 0.02 - 0.001  # To prevent repeating open and close actions.
         self.max_gripper_width = config["robot"]["max_gripper_width"][
             self.furniture_name
         ]
 
-        
         self.include_parts_poses: bool = "parts_poses" in self.obs_keys
         
 
@@ -210,7 +213,23 @@ class FurnitureSimEnv(gym.Env):
         else:
             self.furniture = furniture_factory(self.furniture_name)
 
-        self.from_skill = 0 # TODO: to investigate the role of this parameter
+        self.from_skill = 0 # NOTE(Yuke): Unknow parameters
+        rel_poses_arr = np.asarray(
+            [
+                self.furniture.assembled_rel_poses[pair_key]
+                for pair_key in self.pairs_to_assemble
+            ],
+        )
+
+        # Size (num_pairs) x (num_poses) x 4 x 4
+        self.assembled_rel_poses = (
+            torch.from_numpy(rel_poses_arr).float().to(self.device)
+        )
+        self.already_assembled = torch.zeros(
+            (self.num_envs, len(self.pairs_to_assemble)),
+            dtype=torch.bool,
+            device=self.device,
+        )
         
         if "factory" in self.furniture_name:
             # Adjust simulation parameters
@@ -296,7 +315,6 @@ class FurnitureSimEnv(gym.Env):
         self.urdf_loader = URDFLoader()  # just used to generate builder
         self.render_system_group:Optional[sapien.render.RenderSystemGroup] = None
         # Simulation Step
-        self.time = 0
         self.env_steps = np.zeros(self.num_envs, dtype=np.int32)
 
         # %% Create builder
@@ -348,6 +366,8 @@ class FurnitureSimEnv(gym.Env):
 
         # TODO: For the Gym Env implementation, we then further define space (action_space, single_action_space, observation space)
         # TODO: Setup the log for Gym
+        gym.logger.set_level(gym.logger.INFO)
+
         self.act_low = torch.from_numpy(self.action_space.low).to(device=self.device)
         self.act_high = torch.from_numpy(self.action_space.high).to(device=self.device)
         self.sim_steps = int(
@@ -919,7 +939,7 @@ class FurnitureSimEnv(gym.Env):
         april_coord_poses = self.sim_pose_to_april_pose(obstacle_front_poses)
         return april_coord_poses.view(self.num_envs, -1)
     
-    def get_observation(self)->Dict[str, torch.Tensor]:
+    def get_observation(self)->dict:
 
         obs = {}
 
@@ -1025,9 +1045,13 @@ class FurnitureSimEnv(gym.Env):
             dim=0,
         ).T
 
-    def reset(self):
+    def reset(self, env_idxs:Optional[torch.Tensor] = None):
         print("In orignal reset")
-        for i in range(self.num_envs):
+        if env_idxs is None:
+            env_idxs = torch.arange(
+                self.num_envs, device=self.device, dtype=torch.int32
+            )
+        for i in env_idxs:
             self.reset_env(i)
         self.physx_system.step()
         self._fetch_all()
@@ -1040,6 +1064,7 @@ class FurnitureSimEnv(gym.Env):
         return obs
     
     def refresh(self):
+        self.physx_system.step()
         self._fetch_all()
         self.update_render()
             
@@ -1101,6 +1126,7 @@ class FurnitureSimEnv(gym.Env):
             self._reset_franka(env_idx)
 
         self.env_steps[env_idx] = 0
+        self.already_assembled[env_idx] = 0
 
     def _reset_franka(self, env_idx:Optional[int]=None, dof_pos:Optional[torch.Tensor] = None):
         if dof_pos is None:
@@ -1262,17 +1288,23 @@ class FurnitureSimEnv(gym.Env):
         return jacobian_ee
     
     @torch.no_grad()
-    def step(self, action:torch.Tensor, sample_perturbations:bool = False)->Dict[str,torch.Tensor]:
-        # TODO: Reward and Info Calculation
+    def step(self, action:torch.Tensor, sample_perturbations:bool = False)->Tuple[dict,torch.Tensor, torch.Tensor, dict]:
+        # TODO: Introduct of perturbations
         obs = self.get_observation()
         self.update_action(action)
         self._apply_all()
         self.physx_system.step()
         self._fetch_all()
+        reward = self._reward()
+        done = self._done()
         self.update_render()
-        self.time += self.dt
         self.env_steps += 1
-        return obs
+        return (
+            obs,
+            reward,
+            done,
+            {"obs_success": True, "action_success": True},
+        )
         
 
     def update_action(self, action: torch.Tensor)->torch.Tensor:
@@ -1287,12 +1319,12 @@ class FurnitureSimEnv(gym.Env):
         ee_pose = self._get_ee_pose()
 
         # Delta Control
-        if self.action_type == 1:
+        if self.__action_type == 1:
             goal_pose = ee_pose.clone()
             goal_pose[:, :3] += action[:, :3]
             goal_pose[:, 3:] = C.quaternion_multiply(goal_pose[:, 3:].roll(-1, dims=-1), action[:, 3:7]).roll(1, dims=-1)
         # Absolute Control
-        elif self.action_type == 0:
+        elif self.__action_type == 0:
             goal_pose = torch.zeros((self.num_envs, 7), dtype=torch.float32, device=self.device)
             goal_pose[:,:3] = action[:,:3]
             goal_pose[:,3:7] = action[:, 3:7].roll(1, dims=-1)
@@ -1358,6 +1390,78 @@ class FurnitureSimEnv(gym.Env):
         if self.render_system_group is None:
             return
         self.render_system_group.update_render()
+
+    def _reward(self)->torch.Tensor:
+        """Reward is 1 if two parts are newly assembled."""
+        rewards = torch.zeros(
+            (self.num_envs, 1), dtype=torch.float32, device=self.device
+        )
+
+        parts_poses = self.get_parts_poses(sim_coord=True)
+
+        # Reshape parts_poses to (num_envs, num_parts, 7)
+        num_parts = parts_poses.shape[1] // 7
+        parts_poses = parts_poses.view(self.num_envs, num_parts, 7)
+
+        # Compute the rewards based on the newly assembled parts
+        newly_assembled_mask = torch.zeros(
+            (self.num_envs, len(self.pairs_to_assemble)),
+            dtype=torch.bool,
+            device=self.device,
+        )
+        # Loop over parts to be assembled (relatively small number)
+        for i, pair in enumerate(self.pairs_to_assemble):
+            # Compute the relative pose for the specific pair of parts that should be assembled
+            pose_mat1 = C.pose_from_vector(parts_poses[:, pair[0]])
+            pose_mat2 = C.pose_from_vector(parts_poses[:, pair[1]])
+            rel_pose = torch.matmul(torch.inverse(pose_mat1), pose_mat2)
+
+            # Leading dimension is for checking if rel pose matches on of many possible assembled poses
+            if pair in self.furniture.position_only:
+                similar_rot = torch.tensor([True] * self.num_envs, device=self.device)
+            else:
+                similar_rot = C.is_similar_rot(
+                    rel_pose[..., :3, :3],
+                    self.assembled_rel_poses[i, :, None, :3, :3],
+                    self.furniture.ori_bound,
+                )
+            similar_pos = C.is_similar_pos(
+                rel_pose[..., :3, 3],
+                self.assembled_rel_poses[i, :, None, :3, 3],
+                torch.tensor(
+                    self.furniture.assembled_pos_threshold, device=self.device
+                ),
+            )
+            assembled_mask = similar_rot & similar_pos
+
+            # Check if the parts are newly assembled (.any() over the multiple possibly matched assembled posees)
+            newly_assembled_mask[:, i] = (
+                assembled_mask.any(dim=0) & ~self.already_assembled[:, i]
+            )
+
+            # Update the already_assembled tensor
+            self.already_assembled[:, i] |= newly_assembled_mask[:, i]
+
+        # Compute the rewards based on the newly assembled parts
+        rewards = newly_assembled_mask.any(dim=1).float().unsqueeze(-1)
+
+        # print(f"Already assembled: {self.already_assembled.sum(dim=1)}")
+        # print(
+        #     f"Done envs: {torch.where(self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble))[0]}"
+        # )
+
+        if self.manual_done and (rewards == 1).any():
+            return print("Part assembled!")
+
+        return rewards
+    
+    def _done(self):
+        if self.manual_done:
+            return torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
+        return (
+            self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble)
+        ).unsqueeze(1)
+
 
     def gripper_width(self)->torch.Tensor:
         return self.physx_system.cuda_articulation_qpos.torch()[:,7:8] - self.physx_system.cuda_articulation_qpos.torch()[:,8:9]
@@ -1426,54 +1530,12 @@ class FurnitureSimEnv(gym.Env):
         high = np.tile(high, (self.num_envs, 1))
 
         return gym.spaces.Box(low, high, (self.num_envs, pose_dim + 1))
-
-
-if __name__=="__main__":
-    sim_config["robot"]["gripper_torque"] = 0.002
-    is_reset = True
-    sim = FurnitureSimEnv(furniture="one_leg", num_envs=4, parallel_in_single_scene=False, headless=False, obs_keys=FULL_OBS, enable_sensor=False)
-
-    # TODO: Currently please only use lamp/one_leg for the simulation, since to use other furnitures
-    #   file path change in the urdf file should be made.
-    action = sim.franka_default_dof_pos[None,:].repeat(sim.num_envs,axis = 0)
-    sim.action_type = 1
-    action = torch.zeros_like(sim.act_low, device=sim.device)
-
-    while not sim.viewer.closed:
-
-        # sim._fetch_all()
-        # sim.get_jacobian_ee(sim.get_qpos())
-
-        # # Random Policy for gripper
-        # # Gripper is directly controlled with force
-        # noise = np.random.r        # print(obs["parts_poses"].cpu().numpy()[:, -7:-4])and(*action.shape)  - 0.5
-        # noise[:, :-2] = 0
-        # action_np = action
-
-        # action_torch = torch.from_numpy(action_np).to(sim.device, dtype=torch.float32)
-        # noise_torch = torch.from_numpy(noise).to(sim.device, dtype = torch.float32) 
-        # sim.physx_system.cuda_articulation_target_qpos.torch()[:,:7] = action_torch[:,:7]
-        # # sim.physx_system.cuda_articulation_target_qvel.torch()[:, :] = torch.zeros_like(sim.physx_system.cuda_articulation_target_qvel.torch()).to(sim.device)
-        
-        # # Force Control of gripper
-        # sim.physx_system.cuda_articulation_qf.torch()[:,-2:] = 10 * noise_torch[:,-2:]
-        # # print(sim.physx_system.cuda_rigid_body_data.torch().shape)
-
-        # # It seems the order of applying values does not matter
-        # sim.physx_system.gpu_apply_articulation_qf()
-        # sim.physx_system.gpu_apply_articulation_target_position()
-        # # sim.physx_system.gpu_apply_articulation_target_velocity()
-        # if sim.time >= 4:
-        #     action[:, -1] -= 0.001
-        #     action[:, 0] -= 0.0005 * sim.dt
-
-        if sim.time >= 2 and is_reset :
-            sim.reset()
-            is_reset = False
-        obs = sim.step(action)
-        print(obs["parts_poses"].cpu().numpy()[:, -7:-4])
     
-        # This should be put after the step in which we first set target
-        # sim.physx_system.step()
-        # sim.step_viewer()
+    @property
+    def action_type(self)->Literal["delta", "pos"]:
+        if self.__action_type: # 1
+            return "delta"
+        return "pos"
+
+
 

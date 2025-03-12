@@ -14,7 +14,7 @@ if __name__=="__main__":
     is_reset = True
     sim = FurnitureSimEnv(furniture="one_leg", num_envs=4, parallel_in_single_scene=False, headless=False, obs_keys=FULL_OBS, enable_sensor=False)
 
-    # TODO: Currently please only use lamp/one_leg for the simulation, since to use other furnitures
+    # NOTE: Currently please onlytime use lamp/one_leg for the simulation, since to use other furnitures
     #   file path change in the urdf file should be made.
     action = sim.franka_default_dof_pos[None,:].repeat(sim.num_envs,axis = 0)
     sim.action_type = 1
@@ -44,15 +44,14 @@ if __name__=="__main__":
         # sim.physx_system.gpu_apply_articulation_qf()
         # sim.physx_system.gpu_apply_articulation_target_position()
         # # sim.physx_system.gpu_apply_articulation_target_velocity()
-        # if sim.time >= 4:
-        #     action[:, -1] -= 0.001
-        #     action[:, 0] -= 0.0005 * sim.dt
+        if sim.env_steps[0] >= 200:
+            action[:, -1] -= 0.001
+            action[:, 0] -= 0.0005 * sim.dt
 
-        if sim.time >= 2 and is_reset :
+        if sim.env_steps[0] >= 1000 and is_reset :
             sim.reset()
             is_reset = False
-        obs = sim.step(action)
-        print(obs["parts_poses"].cpu().numpy()[:, -7:-4])
+        obs,reward,done,info = sim.step(action)
     
         # This should be put after the step in which we first set target
         # sim.physx_system.step()
