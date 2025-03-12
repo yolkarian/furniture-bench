@@ -18,10 +18,7 @@ from sapien.utils.viewer import Viewer
 import os
 import numpy as np
 from numpy.typing import NDArray
-
-from collections import defaultdict
 from typing import Dict, Union
-from datetime import datetime
 from pathlib import Path
 
 from furniture_bench.furniture.furniture import Furniture
@@ -40,7 +37,7 @@ from furniture_bench.furniture import furniture_factory
 from furniture_bench.config import ROBOT_HEIGHT, config
 from furniture_bench.utils.pose import get_mat, rot_mat
 from furniture_bench.envs.observation import (
-    DEFAULT_VISUAL_OBS,FULL_OBS
+    DEFAULT_VISUAL_OBS
 )
 from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS, ROBOT_STATES
 from furniture_bench.furniture.parts.part import Part
@@ -63,13 +60,12 @@ ASSET_ROOT = str(Path(__file__).parent.parent.parent / "assets_no_tags")
 
 
 # TODO:
-#      1. Test Reset_env)ti APIs 
+#      1. Test reset_env_to API
 #      2. Add randomness of obstacle, given that the full observations include the pose of obstacles
-#      3. Add Tests
+#      3. Investigation the difference between Isaac Gym and Sapien in Operation
+#      4. Implement Sensor with different Shader (For different Shader, the operation to read data is different)
 
-# NOTE(Yuke): 
-# 1. Currently no such shared collision shapes which can collide with elements in all Scenes.
-# 2. Some actors do not contain collision mesh.
+
 
 class FurnitureSimEnv(gym.Env):
     def __init__(
@@ -81,14 +77,13 @@ class FurnitureSimEnv(gym.Env):
         randomness: Union[str, Randomness] = "low",
         headless: bool = False,
         enable_sensor: bool = True,
-        action_type:Literal["delta", "pos"] = "pos",
+        action_type:Literal["delta", "pos"] = "delta",
         ctrl_mode:Literal["diffik"] = "diffik",
         parallel_in_single_scene: bool = False,
         manual_done:bool = False,
         enable_reward:bool = False,
         **kwargs:dict
     ):
-        print(ASSET_ROOT)
         self.furniture_name = furniture
         self.num_envs = num_envs
         self.obs_keys = obs_keys or DEFAULT_VISUAL_OBS
@@ -101,6 +96,8 @@ class FurnitureSimEnv(gym.Env):
         self.ctrl_mode = ctrl_mode
         self.device = torch.device("cuda")
         self.sapien_device = sapien.Device(self.device.type)
+        self.assemble_idx = 0
+        self.move_neutral = False
         assert self.ctrl_mode == "diffik"
 
         if self.randomness == Randomness.LOW:
@@ -364,8 +361,6 @@ class FurnitureSimEnv(gym.Env):
         # TODO: Controller Reset (if we use self-implemented controller)
         self._init_ctrl()
 
-        # TODO: For the Gym Env implementation, we then further define space (action_space, single_action_space, observation space)
-        # TODO: Setup the log for Gym
         gym.logger.set_level(gym.logger.INFO)
 
         self.act_low = torch.from_numpy(self.action_space.low).to(device=self.device)
@@ -939,6 +934,136 @@ class FurnitureSimEnv(gym.Env):
         april_coord_poses = self.sim_pose_to_april_pose(obstacle_front_poses)
         return april_coord_poses.view(self.num_envs, -1)
     
+    def get_assembly_action(self) -> torch.Tensor:
+        """Scripted furniture assembly logic.
+
+        Returns:
+            Tuple (action for the assembly task, skill complete mask)
+        """
+        assert self.num_envs == 1  # Only support one environment for now.
+        if self.furniture_name not in ["one_leg", "cabinet", "lamp", "round_table"]:
+            raise NotImplementedError(
+                "[one_leg, cabinet, lamp, round_table] are supported for scripted agent"
+            )
+
+        if self.assemble_idx > len(self.furniture.should_be_assembled):
+            return torch.tensor([0, 0, 0, 0, 0, 0, 1, -1], device=self.device)
+
+        ee_pos, ee_quat = self.get_ee_pose()
+        gripper_width = self.gripper_width()
+        ee_pos, ee_quat = ee_pos.squeeze(), ee_quat.squeeze()
+
+        if self.move_neutral:
+            if ee_pos[2] <= 0.15 - 0.01:
+                gripper = torch.tensor([-1], dtype=torch.float32, device=self.device)
+                goal_pos = torch.tensor(
+                    [ee_pos[0], ee_pos[1], 0.15], device=self.device
+                )
+                delta_pos = goal_pos - ee_pos
+                delta_quat = torch.tensor([0, 0, 0, 1], device=self.device)
+                action = torch.concat([delta_pos, delta_quat, gripper])
+                return action.unsqueeze(0), 0
+            else:
+                self.move_neutral = False
+        part_idx1, part_idx2 = self.furniture.should_be_assembled[self.assemble_idx]
+
+        part1:Part = self.furniture.parts[part_idx1]
+        part1_name = part1.name
+        part1_pose = C.to_homogeneous(
+            self.rb_states[self.parts_gpu_index[part1_name][0], :3],
+            C.quat2mat(self.rb_states[self.parts_gpu_index[part1_name][0],3:7]),
+        )
+        part2:Part = self.furniture.parts[part_idx2]
+        part2_name = part2.name
+        part2_pose = C.to_homogeneous(
+            self.rb_states[self.parts_gpu_index[part2_name][0], :3],
+            C.quat2mat(self.rb_states[self.parts_gpu_index[part2_name][0], 3:7]),
+        )
+        rel_pose:torch.Tensor = torch.linalg.inv(part1_pose) @ part2_pose
+        assembled_rel_poses = self.furniture.assembled_rel_poses[(part_idx1, part_idx2)]
+        if self.furniture.assembled(rel_pose.cpu().numpy(), assembled_rel_poses):
+            self.assemble_idx += 1
+            self.move_neutral = True
+            return (
+                torch.tensor(
+                    [0, 0, 0, 0, 0, 0, 1, -1], dtype=torch.float32, device=self.device
+                ).unsqueeze(0),
+                1,
+            )  # Skill complete is always 1 when assembled.
+        parts_gpu_index = self.parts_gpu_index.copy()
+        parts_gpu_index.update(self.obstacle_gpu_index)
+        if not part1.pre_assemble_done:
+            goal_pos, goal_ori, gripper, skill_complete = part1.pre_assemble(
+                ee_pos,
+                ee_quat,
+                gripper_width,
+                self.rb_states,
+                parts_gpu_index,
+                self.sim_to_april_mat,
+                self.april_to_robot_mat,
+            )
+        elif not part2.pre_assemble_done:
+            goal_pos, goal_ori, gripper, skill_complete = part2.pre_assemble(
+                ee_pos,
+                ee_quat,
+                gripper_width,
+                self.rb_states,
+                parts_gpu_index,
+                self.sim_to_april_mat,
+                self.april_to_robot_mat,
+            )
+        else:
+            goal_pos, goal_ori, gripper, skill_complete = self.furniture.parts[
+                part_idx2
+            ].fsm_step(
+                ee_pos,
+                ee_quat,
+                gripper_width,
+                self.rb_states,
+                parts_gpu_index,
+                self.sim_to_april_mat,
+                self.april_to_robot_mat,
+                self.furniture.parts[part_idx1].name,
+            )
+
+        delta_pos = goal_pos - ee_pos
+
+        # Scale translational action.
+        delta_pos_sign = delta_pos.sign()
+        delta_pos = torch.abs(delta_pos) * 2
+        for i in range(3):
+            if delta_pos[i] > 0.03:
+                delta_pos[i] = 0.03 + (delta_pos[i] - 0.03) * np.random.normal(1.5, 0.1)
+        delta_pos = delta_pos * delta_pos_sign
+
+        # Clamp too large action.
+        max_delta_pos = 0.11 + 0.01 * torch.rand(3, device=self.device)
+        max_delta_pos[2] -= 0.04
+        delta_pos = torch.clamp(delta_pos, min=-max_delta_pos, max=max_delta_pos)
+
+        delta_quat = C.quat_mul(C.quat_conjugate(ee_quat), goal_ori)
+        # Add random noise to the action.
+        if (
+            self.furniture.parts[part_idx2].state_no_noise()
+            and np.random.random() < 0.50
+        ):
+            delta_pos = torch.normal(delta_pos, 0.005)
+            delta_quat = C.quat_multiply(
+                delta_quat,
+                torch.tensor(
+                    T.axisangle2quat(
+                        [
+                            np.radians(np.random.normal(0, 5)),
+                            np.radians(np.random.normal(0, 5)),
+                            np.radians(np.random.normal(0, 5)),
+                        ]
+                    ),
+                    device=self.device,
+                ),
+            ).to(self.device)
+        action = torch.concat([delta_pos, delta_quat, gripper])
+        return action.unsqueeze(0), skill_complete
+    
     def get_observation(self)->dict:
 
         obs = {}
@@ -1056,6 +1181,7 @@ class FurnitureSimEnv(gym.Env):
         self.physx_system.step()
         self._fetch_all()
         self.update_render()
+        self.assemble_idx = 0
         obs = self.get_observation()
 
         self.reward = torch.zeros((self.num_envs, 1), dtype=torch.float32)
@@ -1095,6 +1221,7 @@ class FurnitureSimEnv(gym.Env):
         self._reset_franka(env_idx, torch.from_numpy(dof_pos).to(dtype=torch.float32, device=self.device))
         self._reset_parts(env_idx, state["parts_poses"])
         self.env_steps[env_idx] = 0
+        self.move_neutral = False
 
     def reset_env(self, env_idx:int, reset_franka:bool=True, reset_parts:bool = True):
         """Reset the environment
@@ -1127,6 +1254,7 @@ class FurnitureSimEnv(gym.Env):
 
         self.env_steps[env_idx] = 0
         self.already_assembled[env_idx] = 0
+        self.move_neutral = False
 
     def _reset_franka(self, env_idx:Optional[int]=None, dof_pos:Optional[torch.Tensor] = None):
         if dof_pos is None:
@@ -1331,11 +1459,10 @@ class FurnitureSimEnv(gym.Env):
 
         # SAPIEN uses wxyz, diffik uses xyzw
         self.step_ctrl.set_goal(goal_pose[:,:3], goal_pose[:,3:7].roll(-1, dims=-1))
-            
         target_qpos = torch.zeros((self.num_envs, self.franka_num_dof), dtype=torch.float32, device=self.device)
         target_qf = torch.zeros((self.num_envs, self.franka_num_dof), dtype=torch.float32, device=self.device)
         gripper_action = torch.zeros((self.num_envs, 1), dtype=torch.float32, device=self.device)
-
+        
         grasp = action[:, -1]
 
         # Avoid Oscilation of Grip
@@ -1376,6 +1503,7 @@ class FurnitureSimEnv(gym.Env):
             self.max_gripper_width / 2,
             torch.zeros_like(target_qpos[:, 7:9]),
         ) # No use since it is qf control
+        # print(target_qpos.cpu().numpy())
 
         # Write changes to buffer
         self.physx_system.cuda_articulation_qf.torch()[:, :] = target_qf
@@ -1536,6 +1664,16 @@ class FurnitureSimEnv(gym.Env):
         if self.__action_type: # 1
             return "delta"
         return "pos"
+    
+    @property
+    def rb_states(self)->torch.Tensor:
+        rb_states = self.physx_system.cuda_rigid_body_data.torch().clone()
+        rb_states[..., 3:7] = rb_states[..., 3:7].roll(-1, dims=-1)
+        return rb_states
+    
+    @property
+    def april_to_robot_mat(self):
+        return torch.tensor(self.base_tag_from_robot_mat, device=self.device)
 
 
 

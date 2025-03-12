@@ -4,6 +4,7 @@ import argparse
 import pickle
 
 import furniture_bench
+from furniture_bench.envs.sapien_envs.furniture_sim_env import FurnitureSimEnv
 
 import gym
 import cv2
@@ -92,8 +93,7 @@ def main():
     args = parser.parse_args()
 
     # Create FurnitureSim environment.
-    env = gym.make(
-        args.env_id,
+    env = FurnitureSimEnv(
         furniture=args.furniture,
         num_envs=args.num_envs,
         resize_img=not args.high_res,

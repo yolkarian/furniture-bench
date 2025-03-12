@@ -12,12 +12,12 @@ from furniture_bench.envs.observation import (
 if __name__=="__main__":
     sim_config["robot"]["gripper_torque"] = 0.002
     is_reset = True
-    sim = FurnitureSimEnv(furniture="one_leg", num_envs=4, parallel_in_single_scene=False, headless=False, obs_keys=FULL_OBS, enable_sensor=False)
+    sim = FurnitureSimEnv(furniture="one_leg", num_envs=4, parallel_in_single_scene=False, headless=False, obs_keys=FULL_OBS, enable_sensor=False, action_type="delta")
 
     # NOTE: Currently please onlytime use lamp/one_leg for the simulation, since to use other furnitures
     #   file path change in the urdf file should be made.
     action = sim.franka_default_dof_pos[None,:].repeat(sim.num_envs,axis = 0)
-    sim.action_type = 1
+    
     action = torch.zeros_like(sim.act_low, device=sim.device)
 
     while not sim.viewer.closed:

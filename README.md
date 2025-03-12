@@ -8,6 +8,8 @@
 
 FurnitureBench is the real-world furniture assembly benchmark, which aims at providing a reproducible and easy-to-use platform for long-horizon complex robotic manipulation.
 
+This is a fork of FurnitureBench. It utilizes SAPIEN as simulator for FurnitureSim with supporting of Python3.9+.
+
 It features
 - Long-horizon complex manipulation tasks
 - Standardized environment setup
@@ -55,3 +57,4 @@ If you find FurnitureBench useful for your research, please cite this work:
 ## TODO
 
 - Implement self-collision avoidance
+- Implement Video Recorder

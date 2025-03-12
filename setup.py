@@ -8,7 +8,7 @@ core_requirements = [
     "opencv-python",
     # "gym==0.21.0",
     "gym==0.22.0",
-    "pynput==1.7.7"
+    "pynput==1.7.7",
     "joblib",
     "numba",
     "pyrealsense2",
@@ -18,7 +18,7 @@ core_requirements = [
 ]
 
 setup(
-    name="furniture_bench_sapien",
+    name="furniture_bench",
     version="0.1",
     author="CLVR @ KAIST",
     author_email="clvr.kaist@gmail.com",
