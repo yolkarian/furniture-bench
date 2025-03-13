@@ -29,7 +29,7 @@ sim_config["scripted_timeout"] = {
 @dataclass
 class PhysxParams:
     solver_type: int = 1   # 0 PCS 1 TGS
-    bounce_threshold_velocity: float = 2.0
+    bounce_threshold_velocity: float = 0.02
     num_position_iterations: int = 10
     num_velocity_iterations: int = 1
     rest_offset: float = 0.0
@@ -125,8 +125,8 @@ sim_config["robot"].update(
         # "kp": [270, 270, 270, 210, 180, 240],  # Cranked up gains
         "kv": None,  # Default velocity gains.
         "arm_frictions": 0.05,  # Default arm friction.
-        "gripper_frictions": 15.0,  # Default gripper friction.
-        "gripper_torque": 13,  # Default torque for gripper.
+        "gripper_frictions": 25.0,  # Default gripper friction. Originally 15.0
+        "gripper_torque": 5,  # Default torque for gripper. Originally 13.0
     }
 )
 

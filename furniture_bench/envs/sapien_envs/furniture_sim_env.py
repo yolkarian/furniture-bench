@@ -185,7 +185,7 @@ class FurnitureSimEnv(gym.Env):
         self.pose_dim = 7
         self.stiffness = 1000.00
         self.damping = 200.0
-        self.restitution = 0.5
+        self.restitution = 0.001
         self.init_assembled:bool = False  # If true, the environment is initialized and reset without randomness
         self.randomness = Randomness.LOW
         self.pos_scalar:float = 1.0
@@ -307,7 +307,23 @@ class FurnitureSimEnv(gym.Env):
         self.shader_dir = os.path.join(os.path.dirname(sapien.__file__),"vulkan_shader","minimal")
 
         #%% General Setup of Simulator
+        sim_params: SimParams = sim_config["sim_params"]
         sapien.physx.enable_gpu()
+        sapien.physx.set_scene_config(
+            gravity=sim_params.gravity,
+            bounce_threshold=sim_params.physx.bounce_threshold_velocity,
+            enable_tgs=True if sim_params.physx.solver_type == 1 else False,
+            cpu_workers=sim_params.physx.num_threads,
+        )
+        sapien.physx.set_shape_config(
+            contact_offset=sim_params.physx.contact_offset,
+            rest_offset=sim_params.physx.rest_offset,
+        )
+        sapien.physx.set_body_config(
+            solver_position_iterations=sim_params.physx.num_position_iterations,
+            solver_velocity_iterations=sim_params.physx.num_velocity_iterations,
+        )
+
         self.physx_system = sapien.physx.PhysxGpuSystem(self.sapien_device)
         self.urdf_loader = URDFLoader()  # just used to generate builder
         self.render_system_group:Optional[sapien.render.RenderSystemGroup] = None
@@ -323,23 +339,8 @@ class FurnitureSimEnv(gym.Env):
 
 
         # load Scene configs
-        sim_params: SimParams = sim_config["sim_params"]
         self.physx_system.set_timestep(sim_params.dt)
         self.dt = sim_params.dt
-        sapien.physx.set_scene_config(
-            gravity=sim_params.gravity,
-            bounce_threshold=sim_params.physx.bounce_threshold_velocity,
-            enable_tgs=True if sim_params.physx.solver_type == 1 else False,
-            cpu_workers=sim_params.physx.num_threads,
-        )
-        sapien.physx.set_shape_config(
-            contact_offset=sim_params.physx.contact_offset,
-            rest_offset=sim_params.physx.rest_offset,
-        )
-        sapien.physx.set_body_config(
-            solver_position_iterations=sim_params.physx.num_position_iterations,
-            solver_velocity_iterations=sim_params.physx.num_velocity_iterations,
-        )
 
         self._create_scenes()
         self._add_light()
@@ -386,7 +387,7 @@ class FurnitureSimEnv(gym.Env):
             sapien.Pose(p=[0, 0, self.table_pos[2]])
         )
         for collision_record in self.static_obj_builders["table"].collision_records:
-            mt = sapien.physx.PhysxMaterial(sim_config["table"]["friction"], sim_config["table"]["friction"], self.restitution)
+            mt = sapien.physx.PhysxMaterial(1.05 * sim_config["table"]["friction"], sim_config["table"]["friction"], self.restitution)
             collision_record.material = mt
         self.static_obj_builders["base_tag"].set_initial_pose(
             self.base_tag_pose
@@ -424,6 +425,7 @@ class FurnitureSimEnv(gym.Env):
         opts = AssetOptions()
         opts.armature = 0.01
         opts.thickness = 0.001
+        opts.density = 5 * opts.density
         opts.fix_base_link = True
         opts.disable_gravity = True
         opts.flip_visual_attachments = True
@@ -437,7 +439,7 @@ class FurnitureSimEnv(gym.Env):
             # Different setting for the body and gripper
             if link_builder.name.endswith("finger"):
                 link_builder.joint_record.limits = (0, self.max_gripper_width / 2)
-                link_builder.joint_record.friction = sim_config["robot"]["gripper_frictions"]
+                link_builder.joint_record.friction = 1.05 * sim_config["robot"]["gripper_frictions"]
             else:
                 link_builder.joint_record.friction = sim_config["robot"]["arm_frictions"]
         self.frank_builder.set_initial_pose(self.franka_pose)
@@ -445,11 +447,12 @@ class FurnitureSimEnv(gym.Env):
     def _create_part_builders(self):
         self.part_builders:Dict[str, ActorBuilder] = {}
         self.part_default_pose:Dict[str, np.ndarray] = {}
+        self.urdf_loader.load_nonconvex_collisions_from_file = True
         for part in self.furniture.parts:
             part_builder = generate_builder_with_options_(
                 self.urdf_loader,
                 os.path.join(ASSET_ROOT, part.asset_file),
-                AssetOptions()
+                sim_config["asset"][part.name]
             )
             part_builder.set_name(part.name)
             self.part_builders[part.name] = part_builder
@@ -475,6 +478,7 @@ class FurnitureSimEnv(gym.Env):
                     sim_config["parts"]["friction"],
                     self.restitution
                 )  
+        self.urdf_loader.load_nonconvex_collisions_from_file = False
     def _create_scenes(self):
         #%% Create Scenes
         self.scenes: List[sapien.Scene] = []
@@ -1421,11 +1425,12 @@ class FurnitureSimEnv(gym.Env):
         obs = self.get_observation()
         self.update_action(action)
         self._apply_all()
-        self.physx_system.step()
-        self._fetch_all()
+        for _ in range(self.sim_steps):
+            self.physx_system.step()
+            self._fetch_all()
+            self.update_render()
         reward = self._reward()
         done = self._done()
-        self.update_render()
         self.env_steps += 1
         return (
             obs,
