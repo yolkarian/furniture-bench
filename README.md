@@ -8,7 +8,7 @@
 
 FurnitureBench is the real-world furniture assembly benchmark, which aims at providing a reproducible and easy-to-use platform for long-horizon complex robotic manipulation.
 
-This is a fork of FurnitureBench. It utilizes SAPIEN as simulator for FurnitureSim with supporting of Python3.9+.
+This is a fork of FurnitureBench. The main difference in this fork is that it utilizes (SAPIAN)[https://github.com/haosulab/SAPIEN] as simulator for FurnitureSim with supporting of Python3.9+.
 
 It features
 - Long-horizon complex manipulation tasks
@@ -27,7 +27,24 @@ We elaborate on the real-world environment setup guide and tutorials in our [onl
 
 ## FurnitureSim
 
-FurnitureSim is a simulator based on Isaac Gym. FurnitureSim works on Ubuntu and Python 3.8+. Please refer to [Installing FurnitureSim](https://clvrai.github.io/furniture-bench/docs/getting_started/installing_furniture_sim.html) and [How to Use FurnitureSim](https://clvrai.github.io/furniture-bench/docs/tutorials/furniture_sim.html) for more details about FurnitureSim.
+FurnitureSim in this fork is a simulator based on SAPIEN. FurnitureSim works on any Linux and Python 3.9. Original FurnitureSim is a simulator based on Isaac Gym. 
+
+Currently, the fork keeps updating in order to achieve full migration from Isaac Gym to SAPIEN.
+
+## Roadmap
+
+### Tested
+
+- Executable Simulator with Data Collection
+- Successful furniture assembly with handcrafted scripts.
+
+### TODO
+
+- Change shader for camera simulation 
+- Env registration in Gym 
+- Removal of all code related to Isaac Gym
+- Evaluation with approaches from the original FurnitureBench.
+- Test reinforcement learning (fine-tuning) in the environment
 
 
 ## Citation

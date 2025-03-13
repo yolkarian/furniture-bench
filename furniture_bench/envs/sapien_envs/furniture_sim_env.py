@@ -64,7 +64,8 @@ ASSET_ROOT = str(Path(__file__).parent.parent.parent / "assets_no_tags")
 #      2. Add randomness of obstacle, given that the full observations include the pose of obstacles
 #      3. Investigation the difference between Isaac Gym and Sapien in Operation
 #      4. Implement Sensor with different Shader (For different Shader, the operation to read data is different)
-
+#      5. Introduction Observation Space
+#      6. Turn off RenderGroup when num_env == 1
 
 
 class FurnitureSimEnv(gym.Env):
@@ -73,6 +74,7 @@ class FurnitureSimEnv(gym.Env):
         furniture: str,
         num_envs: int = 1,
         obs_keys: List[str] = None,
+        act_rot_repr:Literal["quat", "rot_6d", "axis"] = "quat",
         parts_poses_in_robot_frame:bool = False, # Or Apriltag Frame
         randomness: Union[str, Randomness] = "low",
         headless: bool = False,
@@ -85,7 +87,15 @@ class FurnitureSimEnv(gym.Env):
         **kwargs:dict
     ):
         self.furniture_name = furniture
+        self.task_name = furniture
         self.num_envs = num_envs
+        if act_rot_repr == "axis":
+            self.__act_rot_repr:Literal[0, 1, 2] = 2
+        elif act_rot_repr == "rot_6d":
+            self.__act_rot_repr:Literal[0, 1, 2] = 1
+        else:
+            self.__act_rot_repr:Literal[0, 1, 2] = 0
+
         self.obs_keys = obs_keys or DEFAULT_VISUAL_OBS
         self.parts_poses_in_robot_frame = parts_poses_in_robot_frame
         self.randomness = str_to_enum(randomness)
@@ -362,10 +372,14 @@ class FurnitureSimEnv(gym.Env):
         # TODO: Controller Reset (if we use self-implemented controller)
         self._init_ctrl()
 
-        gym.logger.set_level(gym.logger.INFO)
+        try:
+            gym.logger.set_level(gym.logger.INFO)
+        except Exception:
+            pass
 
         self.act_low = torch.from_numpy(self.action_space.low).to(device=self.device)
         self.act_high = torch.from_numpy(self.action_space.high).to(device=self.device)
+        print(self.act_low.shape, "xxxxxxxxxxxxx")
         self.sim_steps = int(
             1.0 / config["robot"]["hz"] / sim_config["sim_params"].dt + 0.1
         )
@@ -1449,18 +1463,34 @@ class FurnitureSimEnv(gym.Env):
 
         action = torch.clamp(action, self.act_low, self.act_high)
 
+
         ee_pose = self._get_ee_pose()
+        if self.__act_rot_repr == 0:
+            # Real part is the last element in the quaternion.
+            action_quat_xyzw = action[:, 3:7]
+
+        elif self.__act_rot_repr == 1:
+            rot_6d = action[:, 3:9]
+            rot_mat = C.rotation_6d_to_matrix(rot_6d)
+            # Real part is the first element in the quaternion.
+            action_quat_xyzw = C.matrix_to_quaternion_xyzw(rot_mat)
+
+        else:
+            # Convert axis angle to quaternion.
+            action_quat_xyzw = C.matrix_to_quaternion_xyzw(
+                C.axis_angle_to_matrix(action[:, 3:6])
+            )
 
         # Delta Control
         if self.__action_type == 1:
             goal_pose = ee_pose.clone()
             goal_pose[:, :3] += action[:, :3]
-            goal_pose[:, 3:] = C.quaternion_multiply(goal_pose[:, 3:].roll(-1, dims=-1), action[:, 3:7]).roll(1, dims=-1)
+            goal_pose[:, 3:] = C.quaternion_multiply(goal_pose[:, 3:].roll(-1, dims=-1), action_quat_xyzw).roll(1, dims=-1)
         # Absolute Control
         elif self.__action_type == 0:
             goal_pose = torch.zeros((self.num_envs, 7), dtype=torch.float32, device=self.device)
             goal_pose[:,:3] = action[:,:3]
-            goal_pose[:,3:7] = action[:, 3:7].roll(1, dims=-1)
+            goal_pose[:,3:7] = action_quat_xyzw.roll(1, dims=-1)
 
         # SAPIEN uses wxyz, diffik uses xyzw
         self.step_ctrl.set_goal(goal_pose[:,:3], goal_pose[:,3:7].roll(-1, dims=-1))
@@ -1628,6 +1658,16 @@ class FurnitureSimEnv(gym.Env):
         """Converts AprilTag coordinate to simulator base_tag coordinate."""
         return self.april_to_sim_mat @ april_coord_mat
     
+    def filter_and_concat_robot_state(self, robot_state: Dict[str, torch.Tensor]):
+        current_robot_state = []
+        for rs in ROBOT_STATES:
+            if rs not in robot_state:
+                continue
+
+            # if rs == "gripper_width":
+            #     robot_state[rs] = robot_state[rs].reshape(-1, 1)
+            current_robot_state.append(robot_state[rs])
+        return torch.cat(current_robot_state, dim=-1)
     
     @property
     def envs(self)->List[sapien.Scene]:
@@ -1652,10 +1692,13 @@ class FurnitureSimEnv(gym.Env):
     @property
     def action_space(self):
         # Action space to be -1.0 to 1.0.
-        
-        pose_dim = 7
+        if self.__act_rot_repr == 0:
+            pose_dim = 7
+        elif self.__act_rot_repr == 1:
+            pose_dim = 9
+        else:  # axis
+            pose_dim = 6
 
-        # Why here add one extra parameter here?
         low = np.array([-1] * pose_dim + [-1], dtype=np.float32)
         high = np.array([1] * pose_dim + [1], dtype=np.float32)
 
@@ -1679,6 +1722,12 @@ class FurnitureSimEnv(gym.Env):
     @property
     def april_to_robot_mat(self):
         return torch.tensor(self.base_tag_from_robot_mat, device=self.device)
+    
+    @property
+    def n_parts_assemble(self):
+        return len(self.furniture.should_be_assembled)
+    
+
 
 
 
