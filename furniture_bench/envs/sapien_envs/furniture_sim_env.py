@@ -195,7 +195,7 @@ class FurnitureSimEnv(gym.Env):
         self.pose_dim = 7
         self.stiffness = 1000.00
         self.damping = 200.0
-        self.restitution = 0.001
+        self.restitution = 0.000
         self.init_assembled:bool = False  # If true, the environment is initialized and reset without randomness
         self.randomness = Randomness.LOW
         self.pos_scalar:float = 1.0
@@ -379,7 +379,6 @@ class FurnitureSimEnv(gym.Env):
 
         self.act_low = torch.from_numpy(self.action_space.low).to(device=self.device)
         self.act_high = torch.from_numpy(self.action_space.high).to(device=self.device)
-        print(self.act_low.shape, "xxxxxxxxxxxxx")
         self.sim_steps = int(
             1.0 / config["robot"]["hz"] / sim_config["sim_params"].dt + 0.1
         )
@@ -1119,6 +1118,9 @@ class FurnitureSimEnv(gym.Env):
         self._config_parts()
         # set Vel of all actors to zero
         self.physx_system.cuda_rigid_body_data.torch()[:, 7:] = torch.zeros_like(self.physx_system.cuda_rigid_body_data.torch()[:, 7:])
+        self.physx_system.cuda_rigid_body_force.torch()[:,:] = 0
+        self.physx_system.cuda_rigid_body_torque.torch()[:, :] = 0
+
         self._config_franka()
         
         self.obstacle_gpu_index = {
@@ -1135,6 +1137,8 @@ class FurnitureSimEnv(gym.Env):
         }
 
         self.physx_system.gpu_apply_rigid_dynamic_data()
+        self.physx_system.gpu_apply_rigid_dynamic_force()
+        self.physx_system.gpu_apply_rigid_dynamic_torque()
         self.physx_system.gpu_apply_articulation_root_pose()
         self.physx_system.gpu_apply_articulation_root_velocity()
         self.physx_system.gpu_apply_articulation_qpos()  
@@ -1185,8 +1189,8 @@ class FurnitureSimEnv(gym.Env):
         # self.parts_gpu_index_tensor: Shape (num_envs, num_parts)
         self.parts_gpu_index_tensor = self.furniture_rb_indices = torch.stack(
             [self.parts_gpu_index[part.name] for part in self.furniture.parts],
-            dim=0,
-        ).T
+            dim=0, 
+        ).T.to(self.device)
 
     def reset(self, env_idxs:Optional[torch.Tensor] = None):
         print("In orignal reset")
@@ -1339,6 +1343,8 @@ class FurnitureSimEnv(gym.Env):
             )
             # linear vel and rot vel to zero
             self.physx_system.cuda_rigid_body_data.torch()[idxs, 7:] = 0
+            self.physx_system.cuda_rigid_body_force.torch()[:,:] = 0
+            self.physx_system.cuda_rigid_body_torque.torch()[:, :] = 0
 
         # Get the obstacle poses, last 7 numbers in the parts_poses tensor
         if parts_poses is not None:
@@ -1435,7 +1441,6 @@ class FurnitureSimEnv(gym.Env):
     
     @torch.no_grad()
     def step(self, action:torch.Tensor, sample_perturbations:bool = False)->Tuple[dict,torch.Tensor, torch.Tensor, dict]:
-        # TODO: Introduct of perturbations
         obs = self.get_observation()
         self.update_action(action)
         self._apply_all()
@@ -1446,6 +1451,11 @@ class FurnitureSimEnv(gym.Env):
         reward = self._reward()
         done = self._done()
         self.env_steps += 1
+        if sample_perturbations:
+            self._random_perturbation_of_parts(
+                self.max_force_magnitude,
+                self.max_torque_magnitude,
+            )
         return (
             obs,
             reward,
@@ -1625,6 +1635,83 @@ class FurnitureSimEnv(gym.Env):
             self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble)
         ).unsqueeze(1)
 
+    def _random_perturbation_of_parts(
+        self,
+        max_force_magnitude:float,
+        max_torque_magnitude:float,
+    ):
+        num_parts = len(self.part_entities)
+        total_parts = len(self.part_entities) * self.num_envs
+
+        # Generate a random mask to select parts with a 1% probability
+        # TODO: changable probability
+        selected_part_mask = torch.rand(total_parts, device=self.device) < 0.01
+
+        # Generate random forces in the xy plane for the selected parts
+        force_theta = (
+            torch.rand((self.num_envs, num_parts, 1), device=self.device)
+            * 2
+            * np.pi
+        )
+        force_magnitude = (
+            torch.rand((self.num_envs, num_parts, 1) , device=self.device)
+            * max_force_magnitude
+        )
+        forces = torch.cat(
+            [
+                force_magnitude * torch.cos(force_theta),
+                force_magnitude * torch.sin(force_theta),
+                torch.zeros_like(force_magnitude),
+            ],
+            dim=-1,
+        )
+
+        # Scale the forces by the mass of the parts
+        forces = (forces * self.force_multiplier).view(-1, 3)
+
+        # Random torques
+        # Generate random torques for the selected parts in the z direction
+        z_torques = max_torque_magnitude * (
+            torch.rand((self.num_envs, num_parts, 1 ) , device=self.device) * 2
+            - 1
+        )
+
+        # Apply the torque multiplier
+        z_torques = (z_torques * self.torque_multiplier).view(-1, 1)
+
+        torques = torch.cat(
+            [
+                torch.zeros_like(z_torques),
+                torch.zeros_like(z_torques),
+                z_torques,
+            ],
+            dim=-1,
+        )
+
+        # Fill the appropriate indices with the generated forces and torques based on the selected part mask
+                # Create tensors to hold forces and torques for all rigid bodies
+        rigid_body_count = self.physx_system.cuda_rigid_body_data.torch().shape[0]
+
+        all_forces = torch.zeros((rigid_body_count, 3), device=self.device)
+        all_torques = torch.zeros((rigid_body_count, 3), device=self.device)
+
+        # Fill the appropriate indices with the generated forces and torques based on the selected part mask
+        all_forces[self.parts_gpu_index_tensor.view(-1)[selected_part_mask]] = forces[
+            selected_part_mask
+        ]
+        all_torques[self.parts_gpu_index_tensor.view(-1)[selected_part_mask]] = torques[
+            selected_part_mask
+        ]
+
+        # Apply the forces and torques to the rigid bodies
+        self.physx_system.cuda_rigid_body_force.torch()[:, :3] = all_forces
+        self.physx_system.cuda_rigid_body_torque.torch()[:, :3] = all_torques
+        
+
+        self.physx_system.gpu_apply_rigid_dynamic_force()
+        self.physx_system.gpu_apply_rigid_dynamic_torque()
+
+
 
     def gripper_width(self)->torch.Tensor:
         return self.physx_system.cuda_articulation_qpos.torch()[:,7:8] - self.physx_system.cuda_articulation_qpos.torch()[:,8:9]
@@ -1726,6 +1813,7 @@ class FurnitureSimEnv(gym.Env):
     @property
     def n_parts_assemble(self):
         return len(self.furniture.should_be_assembled)
+
     
 
 
