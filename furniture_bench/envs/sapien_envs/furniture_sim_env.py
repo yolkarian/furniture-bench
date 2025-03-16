@@ -7,12 +7,13 @@ from furniture_bench.utils.sapien.urdf_loader import URDFLoader
 from sapien.wrapper.urdf_exporter import export_kinematic_chain_urdf
 import sapien.utils.viewer.control_window
 from furniture_bench.utils.sapien import (
-    load_scene_config,
-    generate_builder_with_options,
-    OBS_KEY_2_PICTURE_NAME,
-    OBS_KEY_2_TRANSFORM,
     generate_builder_with_options_,
     camera_pose_from_look_at,
+)
+from furniture_bench.utils.sapien.camera import (
+    SHADER_DICT,
+    set_shader,
+    SAPIEN_SHADERS_DIR
 )
 from sapien.utils.viewer import Viewer
 import os
@@ -67,6 +68,8 @@ ASSET_ROOT = str(Path(__file__).parent.parent.parent / "assets_no_tags")
 #      5. Introduction Observation Space
 #      6. Turn off RenderGroup when num_env == 1
 
+# NOTE(Yuke): Regarding the unit of depth image, please check the comment in `furniture_bench.utils.sapien.camera`
+
 
 class FurnitureSimEnv(gym.Env):
     def __init__(
@@ -83,6 +86,8 @@ class FurnitureSimEnv(gym.Env):
         ctrl_mode:Literal["diffik"] = "diffik",
         parallel_in_single_scene: bool = False,
         manual_done:bool = False,
+        camera_shader:Optional[Literal["default", "minimal", "rt"]] = None,
+        viewer_shader:Optional[Literal["default", "minimal", "rt"]] = None,
         enable_reward:bool = False,
         **kwargs:dict
     ):
@@ -103,6 +108,8 @@ class FurnitureSimEnv(gym.Env):
         self.enable_sensor = enable_sensor
         self.parallel_in_single_scene = parallel_in_single_scene
         self.manual_done = manual_done
+        self.camera_shader = SHADER_DICT[camera_shader] if camera_shader is not None else SHADER_DICT["minimal"]
+        self.viewer_shader = SHADER_DICT[viewer_shader] if viewer_shader is not None else SHADER_DICT["minimal"]
         self.ctrl_mode = ctrl_mode
         self.device = torch.device("cuda")
         self.sapien_device = sapien.Device(self.device.type)
@@ -314,7 +321,6 @@ class FurnitureSimEnv(gym.Env):
         self.img_size = sim_config["camera"][
             "resized_img_size" if self.resize_img else "color_img_size"
         ]
-        self.shader_dir = os.path.join(os.path.dirname(sapien.__file__),"vulkan_shader","minimal")
 
         #%% General Setup of Simulator
         sim_params: SimParams = sim_config["sim_params"]
@@ -667,7 +673,8 @@ class FurnitureSimEnv(gym.Env):
         self.sensor_keys: Dict[str, Set[str]] = {} 
         # camera_obs = {}
         # This camera can access depth information as well
-        def create_camera(name:str, i:int)->sapien.render.RenderCameraComponent:\
+        set_shader(self.camera_shader)
+        def create_camera(name:str, i:int)->sapien.render.RenderCameraComponent:
             
             scene = self.scenes[i]
             cfg = CameraCfg()
@@ -677,7 +684,7 @@ class FurnitureSimEnv(gym.Env):
                     cfg.fovy = 55.0
                 pose = sapien.Pose(p = [-0.04, 0, -0.05])        
                 pose.set_rpy([0, np.radians(-70.0), 0])
-                camera = sapien.render.RenderCameraComponent(cfg.width, cfg.height, shader_dir=self.shader_dir)
+                camera = sapien.render.RenderCameraComponent(cfg.width, cfg.height, shader_dir=self.camera_shader.shader_dir)
                 camera.set_fovy(cfg.fovy)
                 camera.set_far(cfg.far)
                 camera.set_near(cfg.near)
@@ -690,7 +697,7 @@ class FurnitureSimEnv(gym.Env):
                     np.array([0.9, -0.00, 0.65]),
                     np.array([-1, -0.00, 0.3])
                 )
-                camera = sapien.render.RenderCameraComponent(cfg.width, cfg.height, shader_dir=self.shader_dir)
+                camera = sapien.render.RenderCameraComponent(cfg.width, cfg.height, shader_dir=self.camera_shader.shader_dir)
                 camera.set_fovy(cfg.fovy)
                 camera.set_far(cfg.far)
                 camera.set_near(cfg.near)
@@ -731,7 +738,7 @@ class FurnitureSimEnv(gym.Env):
                         continue
                     if camera_name not in self.sensor_keys:
                         self.sensor_keys[camera_name] = set()
-                    self.sensor_keys[camera_name].add(OBS_KEY_2_PICTURE_NAME[obs_key])
+                    self.sensor_keys[camera_name].add(self.camera_shader.obs_keys_2_texture_name[obs_key])
                     if camera_name not in self.sensors:
                         self.sensors[camera_name] = []
                     
@@ -769,7 +776,7 @@ class FurnitureSimEnv(gym.Env):
                 obs_key = "depth"
             else:
                 continue
-            sensor_obs[key] = OBS_KEY_2_TRANSFORM[obs_key](sensor_raw_obs[camera_name][OBS_KEY_2_PICTURE_NAME[obs_key]])
+            sensor_obs[key] = self.camera_shader.output_transform[self.camera_shader.obs_keys_2_texture_name[obs_key]](sensor_raw_obs[camera_name][self.camera_shader.obs_keys_2_texture_name[obs_key]])[obs_key]
         return sensor_obs          
 
     def _init_viewer(self):
@@ -777,6 +784,8 @@ class FurnitureSimEnv(gym.Env):
         # in one scene and rendered in only one render system
         # If it is disabled, only one scene containing one instance of simulation will be
         # display in the viewer
+        sapien.render.set_viewer_shader_dir(self.viewer_shader.shader_dir)
+        set_shader(self.viewer_shader)
         self.viewer:Optional[Viewer] = Viewer()
         self.viewer.set_scene(self.scenes[0])
         control_window = self.viewer.control_window
