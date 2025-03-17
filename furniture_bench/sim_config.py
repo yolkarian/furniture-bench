@@ -145,7 +145,6 @@ Set density for each furniture part.
   - The mass is estimated using 3D printer slicer.
 """
 
-# TODO: Replace the asset options here 
 def default_asset_options():
     asset_options = AssetOptions()
     asset_options.flip_visual_attachments = False
