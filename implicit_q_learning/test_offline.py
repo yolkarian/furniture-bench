@@ -95,7 +95,7 @@ def main(_):
     eval_path = os.path.join(FLAGS.save_dir, "eval", f"{FLAGS.run_name}.{FLAGS.seed}")
 
     if "Sim" in FLAGS.env_name:
-        import isaacgym
+        import sapien
 
     env = make_env(
         FLAGS.env_name,

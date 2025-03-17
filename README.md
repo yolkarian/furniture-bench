@@ -40,9 +40,8 @@ Currently, the fork keeps updating in order to achieve full migration from Isaac
 
 ### TODO
 
-- More realistic Rasterization-based Render
-- Env registration in Gym 
-- Removal of all code related to Isaac Gym
+- More realistic Rasterization-based Render (Now Shader)
+- Removal of Isaacgym in bash scripts
 - Evaluation with approaches from the original FurnitureBench.
 - Test reinforcement learning (fine-tuning) in the environment
 

@@ -1889,6 +1889,42 @@ class FurnitureSimEnv(gym.Env):
     @property
     def n_parts_assemble(self):
         return len(self.furniture.should_be_assembled)
+    
+    @property
+    def observation_space(self):
+        low, high = -np.inf, np.inf
+        dof = self.franka_num_dof
+        img_size = config["furniture"]["env_img_size"]
+        observation_space = {}
+        full_robot_state_space = {
+            "ee_pos": gym.spaces.Box(low=low, high=high, shape=(self.num_envs, 3,)),  # (x, y, z)
+            "ee_quat": gym.spaces.Box(low=low, high=high, shape=(self.num_envs, 4,)),  #  (x, y, z, w)
+            "ee_pos_vel": gym.spaces.Box(low=low, high=high, shape=(self.num_envs, 3,)),
+            "ee_ori_vel": gym.spaces.Box(low=low, high=high, shape=(self.num_envs,3,)),
+            "joint_positions": gym.spaces.Box(low=low, high=high, shape=(self.num_envs, dof,)),
+            "joint_velocities": gym.spaces.Box(low=low, high=high, shape=(self.num_envs, dof,)),
+            "joint_torques": gym.spaces.Box(low=low, high=high, shape=(self.num_envs, dof,)),
+            "gripper_width": gym.spaces.Box(low=low, high=high, shape=(self.num_envs,)),
+            "gripper_finger_1_pos": gym.spaces.Box(low=low, high=high, shape=(self.num_envs,)),
+            "gripper_finger_2_pos": gym.spaces.Box(low=low, high=high, shape=(self.num_envs,))
+        }
+        robot_state_space = gym.spaces.Dict({ key: value for key, value in full_robot_state_space.items() if key in self.robot_state_keys})
+        observation_space["robot_state"] = robot_state_space
+        if self.render_system_group is not None:
+            for key in self.obs_keys:
+                if key.startswith("color"):
+                    observation_space[key] = gym.spaces.Box(low=0, high=255, shape=(self.num_envs, *img_size, 3))
+                if key.startswith("depth"):
+                    observation_space[key] = gym.spaces.Box(low=low, high=high, shape=(self.num_envs, *img_size) )
+        if self.include_parts_poses:
+            observation_space["parts_poses"] =  gym.spaces.Box(
+                    low=low,
+                    high=high,
+                    shape=(self.num_envs, self.furniture.num_parts * self.pose_dim,),
+                )
+        return gym.spaces.Dict(
+            observation_space
+        )
 
     
 class FurnitureSimFullEnv(FurnitureSimEnv):

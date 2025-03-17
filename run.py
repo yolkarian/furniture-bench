@@ -1,4 +1,3 @@
-import isaacgym
 import torch
 import os
 
@@ -18,7 +17,7 @@ def main(cfg: DictConfig) -> None:
     download_ckpt_if_not_exists(cfg.init_ckpt_dir, cfg.run_prefix)
 
     if cfg['env']['id'] == 'FurnitureSim-v0':
-        import isaacgym
+        import sapien
     if cfg.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = "{}".format(cfg.gpu)
         cfg.device = cfg.rolf.device = "cuda"
