@@ -6,7 +6,7 @@ from furniture_bench.config import config
 from furniture_bench.perception.image_utils import resize, resize_crop
 from furniture_bench.robot.robot_state import (
     filter_and_concat_robot_state,
-    FILTERED_ROBOT_STATE_DIM,
+    FILTERED_ROBOT_STATE_DIM,  # Where is this param defined
 )
 from furniture_bench.robot.panda import PandaError
 

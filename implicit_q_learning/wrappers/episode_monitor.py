@@ -1,6 +1,6 @@
 import time
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 from wrappers.common import TimeStep

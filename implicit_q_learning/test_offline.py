@@ -2,7 +2,7 @@ import os
 import subprocess
 from typing import Tuple
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 import tqdm

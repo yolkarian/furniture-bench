@@ -40,7 +40,7 @@ Currently, the fork keeps updating in order to achieve full migration from Isaac
 
 ### TODO
 
-- Change shader for camera simulation 
+- More realistic Rasterization-based Render
 - Env registration in Gym 
 - Removal of all code related to Isaac Gym
 - Evaluation with approaches from the original FurnitureBench.

@@ -1,6 +1,6 @@
 import torch
 from furniture_bench.envs.sapien_envs import FurnitureSimEnv
-from furniture_bench.sim_config_sapien import (
+from furniture_bench.sim_config import (
     sim_config,
 )
 from furniture_bench.envs.observation import (
@@ -17,6 +17,7 @@ if __name__=="__main__":
                           parallel_in_single_scene=False, 
                           headless=False, 
                           obs_keys=FULL_OBS, 
+                          init_assembled=True,
                           enable_sensor=True, 
                           camera_shader="default",
                           viewer_shader="rt",
@@ -30,28 +31,6 @@ if __name__=="__main__":
 
     while not sim.viewer.closed:
 
-        # sim._fetch_all()
-        # sim.get_jacobian_ee(sim.get_qpos())
-
-        # # Random Policy for gripper
-        # # Gripper is directly controlled with force
-        # noise = np.random.r        # print(obs["parts_poses"].cpu().numpy()[:, -7:-4])and(*action.shape)  - 0.5
-        # noise[:, :-2] = 0
-        # action_np = action
-
-        # action_torch = torch.from_numpy(action_np).to(sim.device, dtype=torch.float32)
-        # noise_torch = torch.from_numpy(noise).to(sim.device, dtype = torch.float32) 
-        # sim.physx_system.cuda_articulation_target_qpos.torch()[:,:7] = action_torch[:,:7]
-        # # sim.physx_system.cuda_articulation_target_qvel.torch()[:, :] = torch.zeros_like(sim.physx_system.cuda_articulation_target_qvel.torch()).to(sim.device)
-        
-        # # Force Control of gripper
-        # sim.physx_system.cuda_articulation_qf.torch()[:,-2:] = 10 * noise_torch[:,-2:]
-        # # print(sim.physx_system.cuda_rigid_body_data.torch().shape)
-
-        # # It seems the order of applying values does not matter
-        # sim.physx_system.gpu_apply_articulation_qf()
-        # sim.physx_system.gpu_apply_articulation_target_position()
-        # # sim.physx_system.gpu_apply_articulation_target_velocity()
         if sim.env_steps[0] >= 200:
             action[:, -1] -= 0.001
             action[:, 0] -= 0.0005 * sim.dt
@@ -61,7 +40,4 @@ if __name__=="__main__":
             is_reset = False
         obs,reward,done,info = sim.step(action)
     
-        # This should be put after the step in which we first set target
-        # sim.physx_system.step()
-        # sim.step_viewer()
 

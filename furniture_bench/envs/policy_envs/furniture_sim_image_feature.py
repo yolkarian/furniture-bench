@@ -5,7 +5,6 @@ import torch
 
 from furniture_bench.config import config
 from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv
-from furniture_bench.envs.legacy_envs.furniture_sim_legacy_env import FurnitureSimEnvLegacy # Deprecated.
 from furniture_bench.perception.image_utils import resize, resize_crop
 from furniture_bench.robot.robot_state import filter_and_concat_robot_state
 

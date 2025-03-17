@@ -3,7 +3,7 @@ Code reference:
   https://github.com/MishaLaskin/rad/blob/master/encoder.py
 """
 
-import gym.spaces
+import gymnasium.spaces
 from rolf.utils.aug import RandomShiftsAug
 import torch
 import torch.nn as nn
@@ -27,7 +27,7 @@ class Encoder(nn.Module):
             if len(v.shape) in [3, 4]:
                 if self._encoder_type == "mlp":
                     self.base[k] = None
-                    encoder_output_dim += gym.spaces.flatdim(v)
+                    encoder_output_dim += gymnasium.spaces.flatdim(v)
                 elif self._encoder_type == 'r3m':
                     r3m = R3M(cfg)
                     self.base[k] = r3m
@@ -49,7 +49,7 @@ class Encoder(nn.Module):
                     encoder_output_dim += self.base[k].output_dim
             elif len(v.shape) == 1:
                 self.base[k] = None
-                encoder_output_dim += gym.spaces.flatdim(v)
+                encoder_output_dim += gymnasium.spaces.flatdim(v)
             else:
                 raise ValueError("Check the shape of observation %s (%s)" % (k, v))
 

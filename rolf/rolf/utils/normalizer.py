@@ -1,7 +1,7 @@
 from collections import OrderedDict, deque
 
 import numpy as np
-import gym.spaces
+import gymnasium.spaces
 
 from .mpi import mpi_sum
 from .logger import Logger
@@ -114,7 +114,7 @@ class SubNormalizer:
 
 class Normalizer(object):
     def __init__(self, shape, eps=1e-6, clip_range=np.inf, clip_obs=np.inf):
-        if isinstance(shape, gym.spaces.Dict):
+        if isinstance(shape, gymnasium.spaces.Dict):
             self._shape= {}
             for k, v in shape.spaces.items():
                 if v.shape is not None:

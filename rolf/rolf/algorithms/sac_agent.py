@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import gym.spaces
+import gymnasium.spaces
 
 from .base_agent import BaseAgent
 from .dataset import ReplayBuffer, RandomSampler
@@ -33,7 +33,7 @@ class SACAgent(BaseAgent):
         if cfg.target_entropy is not None:
             self._target_entropy = cfg.target_entropy
         else:
-            self._target_entropy = -gym.spaces.flatdim(ac_space)
+            self._target_entropy = -gymnasium.spaces.flatdim(ac_space)
         self._log_alpha = torch.tensor(
             np.log(cfg.alpha_init_temperature),
             requires_grad=True,

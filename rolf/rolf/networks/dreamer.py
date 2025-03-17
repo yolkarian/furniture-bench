@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gym.spaces
+import gymnasium.spaces
 
 from .utils import MLP, get_activation
 from .distributions import Normal, TanhNormal, SampleDist, MixedDistribution
@@ -59,7 +59,7 @@ class Encoder(nn.Module):
                 )
             elif len(v.shape) == 1:
                 self.encoders[k] = DenseEncoder(
-                    gym.spaces.flatdim(v),
+                    gymnasium.spaces.flatdim(v),
                     cfg.embed_dim,
                     cfg.hidden_dims,
                     cfg.dense_act,
@@ -127,7 +127,7 @@ class Decoder(nn.Module):
             elif len(v.shape) == 1:
                 self.decoders[k] = DenseDecoder(
                     state_dim,
-                    gym.spaces.flatdim(v),
+                    gymnasium.spaces.flatdim(v),
                     cfg.hidden_dims,
                     cfg.dense_act,
                 )

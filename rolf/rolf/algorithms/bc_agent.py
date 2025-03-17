@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data.sampler import SubsetRandomSampler
 from ..algorithms.dataset import ReplayBufferEpisode, SeqSampler
 from torch.optim.lr_scheduler import StepLR
-import gym
+import gymnasium as gym
 
 from .base_agent import BaseAgent
 from .expert_dataset import ExpertDataset

@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 
 from furniture_bench.config import config
 

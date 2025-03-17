@@ -4,9 +4,9 @@ import argparse
 import pickle
 
 import furniture_bench
-from furniture_bench.envs.sapien_envs.furniture_sim_env import FurnitureSimEnv
+from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv
 
-import gym
+import gymnasium as gym
 import cv2
 import torch
 import numpy as np

@@ -8,7 +8,8 @@ import torch.optim as optim
 import torch.autograd as autograd
 import torch.distributions
 from torch.optim.lr_scheduler import StepLR
-import gym.spaces
+import gymnasium as gym
+import gymnasium.spaces
 
 from .base_agent import BaseAgent
 from .ddpg_agent import DDPGAgent

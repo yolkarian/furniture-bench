@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
-import gym
+import gymnasium as gym
 import torch
 from joblib import Parallel, delayed
 from tqdm import tqdm

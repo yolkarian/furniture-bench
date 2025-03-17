@@ -4,7 +4,7 @@
 
 import numpy as np
 import torch
-import gym.spaces
+import gymnasium.spaces
 
 from .base_agent import BaseAgent
 from .dataset import ReplayBufferEpisode, SeqSampler
@@ -21,7 +21,7 @@ class DreamerAgent(BaseAgent):
         super().__init__(cfg, ob_space)
         self._ob_space = ob_space
         self._ac_space = ac_space
-        self._ac_dim = ac_dim = gym.spaces.flatdim(ac_space)
+        self._ac_dim = ac_dim = gymnasium.spaces.flatdim(ac_space)
         self._use_amp = cfg.precision == 16
         self._dtype = torch.float16 if self._use_amp else torch.float32
         state_dim = cfg.deter_dim + cfg.stoch_dim

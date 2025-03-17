@@ -3,7 +3,7 @@ import pickle
 from typing import Optional, Dict
 
 # import d4rl
-import gym
+import gymnasium as gym
 import numpy as np
 import jax.numpy as jnp
 from tqdm import tqdm

@@ -1,6 +1,6 @@
 """Reference: https://github.com/ARISE-Initiative/robosuite/blob/master/robosuite/devices/keyboard.py"""
 
-import gym
+import gymnasium as gym
 import numpy as np
 from pynput.keyboard import Key, Listener
 

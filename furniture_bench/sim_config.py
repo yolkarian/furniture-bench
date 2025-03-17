@@ -1,7 +1,9 @@
 """Define additional parameters based on real-world config for simulator."""
+from dataclasses import dataclass
 
-from isaacgym import gymapi
-
+import numpy as np
+from numpy.typing import NDArray
+from typing import Optional
 from furniture_bench.config import config
 
 sim_config = config.copy()
@@ -23,10 +25,71 @@ sim_config["scripted_timeout"] = {
     "stool": 1_000,  # Increased from 1300
 }
 
+# 
+@dataclass
+class PhysxParams:
+    solver_type: int = 1   # 0 PCS 1 TGS
+    bounce_threshold_velocity: float = 0.02
+    num_position_iterations: int = 10
+    num_velocity_iterations: int = 1
+    rest_offset: float = 0.0
+    contact_offset: float = 0.009999999776482582
+    friction_offset_threshold: float = 0.01  # These two 
+    friction_correlation_distance: float = 0.005
+    max_depenetration_velocity: float = 10
+    num_threads: int = 0
+    use_gpu:bool = False
+    max_gpu_contact_pairs:int = 6553600
+    default_buffer_size_multiplier:int = 8.0
+
+    # TODO: introduce params for contact control       
+    # sapien.physx.set_gpu_memory_config(max_rigid_contact_count=6553600)
+
+    
+@dataclass
+class SimParams:
+    # up_axis
+    gravity: np.ndarray = np.array([0.0, 0.0, -9.8], dtype=np.float32)
+    dt: float = 1.0 / 60.0
+    substeps: int = 2
+    use_gpu_pipeline: bool = True
+    physx: PhysxParams = PhysxParams()
+
+@dataclass
+class AssetOptions:
+    flip_visual_attachments: bool = False # NOTE:(Yuke)
+    fix_base_link:bool = False
+    thickness:float = 0.0
+    density:float = 600.0
+    armature:float = 0.01
+    linear_damping:float = 0.0
+    max_linear_velocity:float = 1000.0
+    angular_damping:float = 0.0
+    max_angular_velocity:float = 1000.0
+    disable_gravity:bool = False
+    enable_gyroscopic_forces:bool = True
+    # NOTE(YUKE): Sapien cannot set the following parameters: flip_visual_attachments, thickness, max_linear_velocity, max_angular_velocity, enable_gyroscopic_forces
+
+
+@dataclass
+class CameraCfg:
+    name:Optional[str] = None
+    width:int = 1280
+    height:int = 720
+    fovy:float = 40.0
+    near:float = 0.001
+    far:float = 2.0
+
+    
+
+
+
+
+
 # Simulator options.
-sim_params = gymapi.SimParams()
-sim_params.up_axis = gymapi.UP_AXIS_Z
-sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.8)
+sim_params = SimParams()
+# sim_params.up_axis = gymapi.UP_AXIS_Z
+sim_params.gravity = np.array([0.0, 0.0, -9.8])
 sim_params.dt = 1.0 / 60.0
 
 # Increasing this can make the simulation more stable.
@@ -61,17 +124,9 @@ sim_config["robot"].update(
         "kp": [90, 90, 90, 70.0, 60.0, 80.0],  # Default positional gains.
         # "kp": [270, 270, 270, 210, 180, 240],  # Cranked up gains
         "kv": None,  # Default velocity gains.
-        "arm_frictions": [
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-        ],  # Default arm friction.
-        "gripper_frictions": [15.0, 15.0],  # Default gripper friction.
-        "gripper_torque": 13,  # Default torque for gripper.
+        "arm_frictions": 0.05,  # Default arm friction.
+        "gripper_frictions": 25.0,  # Default gripper friction. Originally 15.0
+        "gripper_torque": 5,  # Default torque for gripper. Originally 13.0
     }
 )
 
@@ -90,9 +145,9 @@ Set density for each furniture part.
   - The mass is estimated using 3D printer slicer.
 """
 
-
+# TODO: Replace the asset options here 
 def default_asset_options():
-    asset_options = gymapi.AssetOptions()
+    asset_options = AssetOptions()
     asset_options.flip_visual_attachments = False
     asset_options.fix_base_link = False
     asset_options.thickness = 0.0

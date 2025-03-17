@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import gym.spaces
+import gymnasium.spaces
 from torch.optim.lr_scheduler import StepLR
 
 from .base_agent import BaseAgent
@@ -29,8 +29,8 @@ class IRISAgent(BaseAgent):
         self._epoch = 0
         self._skill_t = 0
 
-        state_dim = gym.spaces.flatdim(ob_space)
-        ac_dim = gym.spaces.flatdim(ac_space)
+        state_dim = gymnasium.spaces.flatdim(ob_space)
+        ac_dim = gymnasium.spaces.flatdim(ac_space)
         self.actor = Actor(cfg, state_dim * 2, ac_dim)
         self.encoder = Encoder(cfg.encoder2, state_dim * 2, cfg.vae_dim)
         self.decoder = Decoder(cfg.decoder, state_dim, cfg.vae_dim, state_dim)
@@ -78,7 +78,7 @@ class IRISAgent(BaseAgent):
         dones_float[-1] = 1
 
         for i in range(len(dones_float)):
-            dataset["observations"][i] = gym.spaces.flatten(ob_space, dataset["observations"][i])
+            dataset["observations"][i] = gymnasium.spaces.flatten(ob_space, dataset["observations"][i])
 
         l = len(dones_float)
         e = int(l * 0.95)
@@ -120,7 +120,7 @@ class IRISAgent(BaseAgent):
         optimizer_cuda(self._optim, self._device)
 
     def act(self, ob, state, is_train=True):
-        ob = gym.spaces.flatten(self._ob_space, ob)
+        ob = gymnasium.spaces.flatten(self._ob_space, ob)
         ob = np.expand_dims(ob, axis=0)
         ob = to_tensor(ob, self._device)
 
@@ -133,7 +133,7 @@ class IRISAgent(BaseAgent):
 
         ac, (h, c) = self.actor.act(ob, goal, h, c)
         ac = ac.detach().cpu().numpy().squeeze(0)
-        ac = gym.spaces.unflatten(self._ac_space, ac)
+        ac = gymnasium.spaces.unflatten(self._ac_space, ac)
 
         self._skill_t -= 1
         return ac, (goal, h, c)

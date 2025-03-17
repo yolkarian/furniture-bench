@@ -10,7 +10,7 @@ import sapien.wrapper.scene
 import sapien.wrapper.urdf_loader
 from sapien.wrapper.articulation_builder import ActorBuilder, ArticulationBuilder
 from sapien.render import RenderCameraComponent 
-from furniture_bench.sim_config_sapien import SimParams, AssetOptions
+from furniture_bench.sim_config import SimParams, AssetOptions
 from .urdf_loader import URDFLoader
 from typing import List, Tuple, Union, Optional, Dict, Callable
 import torch
