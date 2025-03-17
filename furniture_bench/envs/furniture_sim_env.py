@@ -363,7 +363,7 @@ class FurnitureSimEnv(gym.Env):
 
         self.physx_system = sapien.physx.PhysxGpuSystem(self.sapien_device)
         self.urdf_loader = URDFLoader()  # just used to generate builder
-        self.render_system_group: Optional[sapien.render.RenderSystemGroup] = None
+        self.render_system_group: Optional[Union[sapien.render.RenderSystemGroup, sapien.render.RenderSystem]] = None
         # Simulation Step
         self.env_steps = np.zeros(self.num_envs, dtype=np.int32)
 
@@ -708,7 +708,7 @@ class FurnitureSimEnv(gym.Env):
                     break
 
     def _load_sensors(self):
-        self.sensors: Dict[str, List[sapien.render.RenderBodyComponent]] = {}
+        self.sensors: Dict[str, List[sapien.render.RenderCameraComponent]] = {}
         self.sensor_keys: Dict[str, Set[str]] = {}
         # camera_obs = {}
         # This camera can access depth information as well
@@ -772,7 +772,6 @@ class FurnitureSimEnv(gym.Env):
             return camera
 
         self.camera_names_dict = {"1": "wrist", "2": "front"}
-
         if not self.parallel_in_single_scene:
             for i, scene in enumerate(self.scenes):
                 for k in self.obs_keys:
@@ -800,7 +799,13 @@ class FurnitureSimEnv(gym.Env):
             if rb is not None:
                 for shape in rb.render_shapes:
                     shape.set_gpu_pose_batch_index(gpu_pose_index)
-
+        if self.num_envs == 1:
+            self.render_system_group = self.scenes[0].render_system
+            self.render_system_group.step()
+            for sensors in self.sensors.values():
+                sensors[0].take_picture()
+            return
+            
         self.render_system_group = sapien.render.RenderSystemGroup(
             [scene.render_system for scene in self.scenes]
         )
@@ -821,13 +826,25 @@ class FurnitureSimEnv(gym.Env):
             Dict[str, torch.Tensor]: Dictionary of Data. "color":[H x W x 3], "depth":[H x W x 1]
         """
         sensor_obs = {}
-        sensor_raw_obs = {
+        for camera_name, sensors in self.sensors.items():
+            print(len(sensors))
+
+        if isinstance(self.render_system_group, sapien.render.RenderSystem):
+            sensor_raw_obs = {
             camera_name: {
-                picture_name: sensor_group.get_picture_cuda(picture_name).torch()
+                picture_name: sensors[0].get_picture_cuda(picture_name).torch().clone()[None, ...]
                 for picture_name in self.sensor_keys[camera_name]
             }
-            for camera_name, sensor_group in self.sensor_groups.items()
+            for camera_name, sensors in self.sensors.items()
         }
+        else:
+            sensor_raw_obs = {
+                camera_name: {
+                    picture_name: sensor_group.get_picture_cuda(picture_name).torch()
+                    for picture_name in self.sensor_keys[camera_name]
+                }
+                for camera_name, sensor_group in self.sensor_groups.items()
+            }
 
         for key in self.obs_keys:
             if key.startswith("color"):
@@ -1835,6 +1852,11 @@ class FurnitureSimEnv(gym.Env):
 
     def step_sensor(self):
         if self.render_system_group is None:
+            return
+        elif isinstance(self.render_system_group, sapien.render.RenderSystem):
+            self.render_system_group.step()
+            for sensors in self.sensors.values():
+                sensors[0].take_picture()
             return
         self.render_system_group.update_render()
 

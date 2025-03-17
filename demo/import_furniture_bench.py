@@ -19,7 +19,7 @@ if __name__=="__main__":
                           obs_keys=FULL_OBS, 
                           init_assembled=True,
                           enable_sensor=True, 
-                          camera_shader="default",
+                          camera_shader="rt",
                           viewer_shader="rt",
                           action_type="delta")
 
