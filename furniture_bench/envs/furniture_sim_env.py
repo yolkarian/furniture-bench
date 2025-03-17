@@ -90,7 +90,7 @@ class FurnitureSimEnv(gym.Env):
         viewer_shader: Optional[Literal["default", "minimal", "rt"]] = None,
         record: bool = False,  #  TODO: Video Recording for this repository
         save_camera_input: bool = False,
-        enable_reward: bool = False,
+        enable_reward: bool = True,
         april_tags: bool = False,
         perturbation_prob: float = 0.01,
         **kwargs: dict,  # dict which is used to catch extra params

@@ -100,6 +100,8 @@ def main():
         init_assembled=args.init_assembled,
         record=args.record,
         headless=args.headless,
+        enable_reward=True,
+        enable_sensor=True,
         save_camera_input=args.save_camera_input,
         randomness=args.randomness,
         high_random_idx=args.high_random_idx,
