@@ -40,9 +40,9 @@ Currently, the fork keeps updating in order to achieve full migration from Isaac
 
 ### TODO
 
-- More realistic Rasterization-based Render (Now Shader)
+- More realistic Rasterization-based Render (New Shader)
 - Removal of Isaacgym in bash scripts
-- Evaluation with approaches from the original FurnitureBench.
+- Evaluation with approaches from the original FurnitureBench. (Introduce of some force change of gripper)
 - Test reinforcement learning (fine-tuning) in the environment
 
 

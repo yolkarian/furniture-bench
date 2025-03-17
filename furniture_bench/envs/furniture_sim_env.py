@@ -826,8 +826,6 @@ class FurnitureSimEnv(gym.Env):
             Dict[str, torch.Tensor]: Dictionary of Data. "color":[H x W x 3], "depth":[H x W x 1]
         """
         sensor_obs = {}
-        for camera_name, sensors in self.sensors.items():
-            print(len(sensors))
 
         if isinstance(self.render_system_group, sapien.render.RenderSystem):
             sensor_raw_obs = {
