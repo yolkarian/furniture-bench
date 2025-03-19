@@ -2,7 +2,7 @@ import copy
 
 import gymnasium as gym
 import numpy as np
-from gym.spaces import Box, Dict
+from gymnasium.spaces import Box, Dict
 
 
 class SinglePrecision(gym.ObservationWrapper):

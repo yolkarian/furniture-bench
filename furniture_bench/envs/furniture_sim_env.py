@@ -50,6 +50,7 @@ from typing import Union, Tuple, List, Optional, Literal, Set
 
 from furniture_bench.sim_config import (
     sim_config,
+    default_asset_options,
     AssetOptions,
     SimParams,
     PhysxParams,
@@ -70,7 +71,7 @@ ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets_no_tags")
 # NOTE(Yuke): Regarding the unit of depth image, please check the comment in `furniture_bench.utils.sapien.camera`
 
 
-class FurnitureSimEnv(gym.Env):
+class FurnitureSimRLEnv(gym.Env):
     def __init__(
         self,
         furniture: str,
@@ -121,7 +122,7 @@ class FurnitureSimEnv(gym.Env):
         self.viewer_shader = (
             SHADER_DICT[viewer_shader]
             if viewer_shader is not None
-            else SHADER_DICT["minimal"]
+            else SHADER_DICT["default"]
         )
         self.ctrl_mode = ctrl_mode
         self.enable_reward = enable_reward
@@ -160,7 +161,7 @@ class FurnitureSimEnv(gym.Env):
             f"Obstacle range: {self.max_obstacle_offset} "
             f"Franka joint randomization limit: {self.franka_joint_rand_lim_deg}"
         )
-        super(FurnitureSimEnv, self).__init__()
+        super(FurnitureSimRLEnv, self).__init__()
         if self.furniture_name == "one_leg":
             force_mul = [25, 1, 1, 1, 1]
             torque_mul = [70, 1, 1, 1, 1]
@@ -219,8 +220,8 @@ class FurnitureSimEnv(gym.Env):
 
         # Predefined parameters
         self.pose_dim = 7
-        self.stiffness = 1000.00
-        self.damping = 200.0
+        self.stiffness = 100.00
+        self.damping = 40.0
         self.restitution = 0.000
         self.pos_scalar: float = 1.0
         self.rot_scalar: float = 1.0
@@ -350,7 +351,10 @@ class FurnitureSimEnv(gym.Env):
             gravity=sim_params.gravity,
             bounce_threshold=sim_params.physx.bounce_threshold_velocity,
             enable_tgs=True if sim_params.physx.solver_type == 1 else False,
+            friction_correlation_distance=sim_params.physx.friction_correlation_distance,
+            friction_offset_threshold=sim_params.physx.friction_offset_threshold,
             cpu_workers=sim_params.physx.num_threads,
+            enable_friction_every_iteration=False,
         )
         sapien.physx.set_shape_config(
             contact_offset=sim_params.physx.contact_offset,
@@ -406,6 +410,7 @@ class FurnitureSimEnv(gym.Env):
         self.sim_steps = int(
             1.0 / config["robot"]["hz"] / sim_config["sim_params"].dt + 0.1
         )
+        print(f"Control per {self.sim_steps} Step(s)")
 
     def _create_static_obj_builders(self):
         # Create builders for all static objs (Actorbuilder/ArticulationBuilder)
@@ -426,7 +431,7 @@ class FurnitureSimEnv(gym.Env):
         )
         for collision_record in self.static_obj_builders["table"].collision_records:
             mt = sapien.physx.PhysxMaterial(
-                1.05 * sim_config["table"]["friction"],
+                sim_config["table"]["friction"],
                 sim_config["table"]["friction"],
                 self.restitution,
             )
@@ -479,7 +484,7 @@ class FurnitureSimEnv(gym.Env):
             if link_builder.name.endswith("finger"):
                 link_builder.joint_record.limits = (0, self.max_gripper_width / 2)
                 link_builder.joint_record.friction = (
-                    1.05 * sim_config["robot"]["gripper_frictions"]
+                    sim_config["robot"]["gripper_frictions"]
                 )
             else:
                 link_builder.joint_record.friction = sim_config["robot"][
@@ -604,6 +609,11 @@ class FurnitureSimEnv(gym.Env):
                     value.set_name(f"scene_{i}_{tmp_name}")
                     value.initial_pose.set_p(scene_offset + tmp_initial_p)
                 obj_entity = value.build()
+                obj_entity.find_component_by_type(
+                    sapien.physx.PhysxRigidBodyComponent
+                ).set_max_depenetration_velocity(
+                    sim_config["sim_params"].physx.max_depenetration_velocity
+                )
                 self.static_obj_entites[key].append(obj_entity)
                 if self.parallel_in_single_scene:
                     value.set_name(tmp_name)
@@ -620,6 +630,11 @@ class FurnitureSimEnv(gym.Env):
                     value.initial_pose.set_p(scene_offset + tmp_initial_p)
                 part_entity = value.build()
                 self.part_entities[key].append(part_entity)
+                part_entity.find_component_by_type(
+                    sapien.physx.PhysxRigidBodyComponent
+                ).set_max_depenetration_velocity(
+                    sim_config["sim_params"].physx.max_depenetration_velocity
+                )
                 if self.parallel_in_single_scene:
                     value.set_name(tmp_name)
                     value.initial_pose.set_p(tmp_initial_p)
@@ -645,6 +660,11 @@ class FurnitureSimEnv(gym.Env):
 
             if i == 0:
                 for link in franka_entity.links:
+                    link.entity.find_component_by_type(
+                        sapien.physx.PhysxRigidBodyComponent
+                    ).set_max_depenetration_velocity(
+                        sim_config["sim_params"].physx.max_depenetration_velocity
+                    )
                     if link.name.endswith("k_ee_link"):
                         self.ee_link_index: int = link.get_index()
                 # NOTE(Yuke): we don't use integrated pinocchino of sapien to compute jacobian of end effector
@@ -1716,8 +1736,8 @@ class FurnitureSimEnv(gym.Env):
         self._apply_all()
         for _ in range(self.sim_steps):
             self.physx_system.step()
-            self._fetch_all()
-            self.update_render()
+        self._fetch_all()
+        self.update_render()
         reward = self._reward()
         done = self._done()
         self.env_steps += 1
@@ -1923,6 +1943,8 @@ class FurnitureSimEnv(gym.Env):
             return print("Part assembled!")
 
         return rewards
+
+    
 
     def _done(self):
         if self.manual_done:
@@ -2208,6 +2230,121 @@ class FurnitureSimEnv(gym.Env):
         return gym.spaces.Dict(observation_space)
 
 
+
+
+class FurnitureSimEnv(FurnitureSimRLEnv):
+    def __init__(self, *args, **kargs):
+        super().__init__(*args, **kargs)
+
+    def _get_parts_poses(self, sim_coord=False):
+        """Get furniture parts poses in the AprilTag frame.
+
+        Args:
+            sim_coord: If True, return the poses in the simulator coordinate. Otherwise, return the poses in the AprilTag coordinate.
+
+        Returns:
+            parts_poses: (num_envs, num_parts * pose_dim). The poses of all parts in the AprilTag frame.
+            founds: (num_envs, num_parts). Always 1 since we don't use AprilTag for detection in simulation.
+        """
+        parts_poses = torch.zeros(
+            (self.num_envs, len(self.furniture.parts) * self.pose_dim),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        founds = torch.ones(
+            (self.num_envs, len(self.furniture.parts)),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        if sim_coord:
+            # Return the poses in the simulator coordinate.
+            for part_idx in range(len(self.furniture.parts)):
+                part = self.furniture.parts[part_idx]
+                rb_idx = self.parts_gpu_index[part.name]
+                part_pose = self.rb_states[rb_idx, :7]
+                parts_poses[
+                    :, part_idx * self.pose_dim : (part_idx + 1) * self.pose_dim
+                ] = part_pose[:, : self.pose_dim]
+
+            return parts_poses, founds
+
+        for env_idx in range(self.num_envs):
+            for part_idx in range(len(self.furniture.parts)):
+                part = self.furniture.parts[part_idx]
+                rb_idx = self.parts_gpu_index[part.name][env_idx]
+                part_pose = self.rb_states[rb_idx, :7]
+                # To AprilTag coordinate.
+                part_pose = torch.concat(
+                    [
+                        *C.mat2pose(
+                            self.sim_coord_to_april_coord(
+                                C.pose2mat(
+                                    part_pose[:3], part_pose[3:7], device=self.device
+                                )
+                            )
+                        )
+                    ]
+                )
+                parts_poses[
+                    env_idx, part_idx * self.pose_dim : (part_idx + 1) * self.pose_dim
+                ] = part_pose
+        return parts_poses, founds
+    
+    @torch.no_grad()
+    def step(
+        self, action: torch.Tensor, sample_perturbations: bool = False
+    ) -> Tuple[dict, torch.Tensor, torch.Tensor, dict]:
+        obs = self.get_observation()
+        self.update_action(action)
+        self._apply_all()
+        for _ in range(self.sim_steps):
+            self.physx_system.step()
+        self._fetch_all()
+        self.update_render()
+        reward = self._reward()
+        done = self._done()
+        self.env_steps += 1
+        if sample_perturbations:
+            self._random_perturbation_of_parts(
+                self.max_force_magnitude,
+                self.max_torque_magnitude,
+            )
+        return (
+            obs,
+            reward,
+            done,
+            {"obs_success": True, "action_success": True},
+        )
+    
+    def _reward(self):
+        """Reward is 1 if two parts are assembled."""
+        rewards = torch.zeros(
+            (self.num_envs, 1), dtype=torch.float32, device=self.device
+        )
+
+        # Don't have to convert to AprilTag coordinate since the reward is computed with relative poses.
+        parts_poses, founds = self._get_parts_poses(sim_coord=True)
+        for env_idx in range(self.num_envs):
+            env_parts_poses = parts_poses[env_idx].cpu().numpy()
+            env_founds = founds[env_idx].cpu().numpy()
+            rewards[env_idx] = self.furnitures[env_idx].compute_assemble(
+                env_parts_poses, env_founds
+            )
+
+        return rewards
+    
+    def _done(self) -> bool:
+        dones = torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
+        if self.manual_done:
+            return dones
+        for env_idx in range(self.num_envs):
+            timeout = self.env_steps[env_idx] > self.furniture.max_env_steps
+            if self.furnitures[env_idx].all_assembled() or timeout:
+                dones[env_idx] = 1
+                if timeout:
+                    gym.logger.warn(f"[env] env_idx: {env_idx} timeout")
+        return dones
+    
 class FurnitureSimFullEnv(FurnitureSimEnv):
     """FurnitureSim environment with all available observations."""
 

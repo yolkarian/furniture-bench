@@ -29,7 +29,7 @@ sim_config["scripted_timeout"] = {
 @dataclass
 class PhysxParams:
     solver_type: int = 1   # 0 PCS 1 TGS
-    bounce_threshold_velocity: float = 0.02
+    bounce_threshold_velocity: float = 0.002
     num_position_iterations: int = 10
     num_velocity_iterations: int = 1
     rest_offset: float = 0.0
@@ -90,7 +90,7 @@ class CameraCfg:
 sim_params = SimParams()
 # sim_params.up_axis = gymapi.UP_AXIS_Z
 sim_params.gravity = np.array([0.0, 0.0, -9.8])
-sim_params.dt = 1.0 / 60.0
+sim_params.dt = 1.0 / 160.0
 
 # Increasing this can make the simulation more stable.
 sim_params.substeps = 2
@@ -101,11 +101,11 @@ sim_params.physx.bounce_threshold_velocity = 0.02
 # Increasing this can make the simulation more stable.
 sim_params.physx.num_position_iterations = 20
 sim_params.physx.num_velocity_iterations = 1
-sim_params.physx.rest_offset = 0.0
-sim_params.physx.contact_offset = 0.002
+sim_params.physx.rest_offset = 0.0000
+sim_params.physx.contact_offset = 0.0002
 sim_params.physx.friction_offset_threshold = 0.01
-sim_params.physx.friction_correlation_distance = 0.0005
-sim_params.physx.max_depenetration_velocity = 10
+sim_params.physx.friction_correlation_distance = 0.005
+sim_params.physx.max_depenetration_velocity = 5
 sim_params.physx.use_gpu = True
 
 # Can set these if contacts are being weird
@@ -114,8 +114,8 @@ sim_params.physx.use_gpu = True
 
 
 sim_config["sim_params"] = sim_params
-sim_config["parts"] = {"friction": 0.15}
-sim_config["table"] = {"friction": 0.10}
+sim_config["parts"] = {"friction": 0.25}
+sim_config["table"] = {"friction": 0.25}
 sim_config["asset"] = {}
 
 # Parameters for the robot.
@@ -125,8 +125,8 @@ sim_config["robot"].update(
         # "kp": [270, 270, 270, 210, 180, 240],  # Cranked up gains
         "kv": None,  # Default velocity gains.
         "arm_frictions": 0.05,  # Default arm friction.
-        "gripper_frictions": 25.0,  # Default gripper friction. Originally 15.0
-        "gripper_torque": 5,  # Default torque for gripper. Originally 13.0
+        "gripper_frictions": 300.0,  # Default gripper friction. Originally 15.0
+        "gripper_torque": 1,  # Default torque for gripper. Originally 13.0
     }
 )
 
@@ -151,10 +151,10 @@ def default_asset_options():
     asset_options.fix_base_link = False
     asset_options.thickness = 0.0
     asset_options.density = 600.0
-    # asset_options.armature = 0.01
-    asset_options.linear_damping = 0.0
+    asset_options.armature = 0.2
+    asset_options.linear_damping = 0.001
     asset_options.max_linear_velocity = 1000.0
-    asset_options.angular_damping = 0.0
+    asset_options.angular_damping = 0.001
     asset_options.max_angular_velocity = 1000.0
     asset_options.disable_gravity = False
     asset_options.enable_gyroscopic_forces = True

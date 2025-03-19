@@ -528,6 +528,7 @@ class URDFLoader:
                 t_axis2joint = Pose(t_axis2joint)
                 t_axis2parent = t_joint2parent * t_axis2joint
 
+                # TODO: Load Joint Effort Limit
                 if joint.joint_type == "revolute":
                     link_builder.set_joint_properties(
                         "revolute_unwrapped",

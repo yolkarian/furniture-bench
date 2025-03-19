@@ -108,6 +108,7 @@ def main():
         act_rot_repr=args.act_rot_repr,
         compute_device_id=args.compute_device_id,
         graphics_device_id=args.graphics_device_id,
+        april_tags = True,
     )
 
     # Initialize FurnitureSim.
