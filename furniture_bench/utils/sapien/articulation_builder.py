@@ -19,6 +19,7 @@ class MimicJointRecord:
 class JointRecord:
     joint_type: str = "undefined"  # "fixed", "prismatic", "revolute"
     limits: Tuple[float] = (-np.inf, np.inf)
+    effort_limit: Optional[float] = None,
     pose_in_parent: sapien.Pose = sapien.Pose()
     pose_in_child: sapien.Pose = sapien.Pose()
     friction: float = 0
@@ -39,13 +40,14 @@ class LinkBuilder(ActorBuilder):
         self.joint_record.name = name
 
     def set_joint_properties(
-        self, type, limits, pose_in_parent, pose_in_child, friction=0, damping=0
+        self, type, limits, pose_in_parent, pose_in_child, friction=0, damping=0, effort_limit = None
     ):
         self.joint_record = JointRecord(
             joint_type=type,
             limits=limits,
             pose_in_parent=pose_in_parent,
             pose_in_child=pose_in_child,
+            effort_limit=effort_limit,
             friction=friction,
             damping=damping,
             name=self.joint_record.name,
@@ -117,7 +119,10 @@ class ArticulationBuilder:
                 "revolute_unwrapped",
             ]:
                 link_component.joint.limit = np.array(b.joint_record.limits).flatten()
-                link_component.joint.set_drive_property(0, b.joint_record.damping)
+                if b.joint_record.effort_limit is not None:
+                    link_component.joint.set_drive_property(0, b.joint_record.damping, force_limit=b.joint_record.effort_limit)
+                else:
+                    link_component.joint.set_drive_property(0, b.joint_record.damping)
                 link_component.joint.set_armature(b.joint_record.armature * np.ones_like(link_component.joint.get_armature(), dtype=np.float32))
 
             links.append(link_component)

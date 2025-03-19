@@ -693,11 +693,12 @@ class FurnitureSimRLEnv(gym.Env):
             for i, joint in enumerate(franka_entity.active_joints):
                 if i < 7:
                     joint.set_drive_properties(
-                        stiffness=self.stiffness, damping=self.damping
+                        stiffness=self.stiffness, damping=self.damping, force_limit=joint.get_force_limit()
                     )
                 else:
+                    pass
                     # Direct qf control. Stiffness and dampling should be zero.
-                    joint.set_drive_properties(stiffness=0, damping=0)
+                    # joint.set_drive_properties(stiffness=0, damping=0.4)
 
             self.scenes.append(scene)
         self.scene_offsets_torch = torch.from_numpy(self.scene_offsets_np).to(

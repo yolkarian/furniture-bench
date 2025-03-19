@@ -126,7 +126,7 @@ sim_config["robot"].update(
         "kv": None,  # Default velocity gains.
         "arm_frictions": 0.05,  # Default arm friction.
         "gripper_frictions": 300.0,  # Default gripper friction. Originally 15.0
-        "gripper_torque": 1,  # Default torque for gripper. Originally 13.0
+        "gripper_torque": 5,  # Default torque for gripper. Originally 13.0
     }
 )
 

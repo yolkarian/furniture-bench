@@ -537,6 +537,7 @@ class URDFLoader:
                         t_axis2joint,
                         friction,
                         damping,
+                        effort_limit=joint.limit.effort
                     )
                 elif joint.joint_type == "continuous":
                     link_builder.set_joint_properties(
@@ -546,6 +547,7 @@ class URDFLoader:
                         t_axis2joint,
                         friction,
                         damping,
+                        effort_limit=joint.limit.effort,
                     )
                 elif joint.joint_type == "prismatic":
                     link_builder.set_joint_properties(
@@ -560,6 +562,7 @@ class URDFLoader:
                         t_axis2joint,
                         friction,
                         damping,
+                        effort_limit=joint.limit.effort
                     )
                 elif joint.joint_type == "fixed":
                     link_builder.set_joint_properties(
