@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 import numpy as np
-import gym.spaces
+import gymnasium.spaces
 
 from ..utils import Logger
 from ..utils.gym_env import get_non_absorbing_state, get_absorbing_state, zero_value
@@ -82,7 +82,7 @@ class ExpertDataset(Dataset):
                         if isinstance(demo["low_level_actions"][i], dict):
                             transition["ac"] = demo["low_level_actions"][i]
                         else:
-                            transition["ac"] = gym.spaces.unflatten(
+                            transition["ac"] = gymnasium.spaces.unflatten(
                                 ac_space, demo["low_level_actions"][i]
                             )
                         transition["done"] = 1 if i + 1 == length else 0
@@ -97,7 +97,7 @@ class ExpertDataset(Dataset):
                     if isinstance(demo["actions"][i], dict):
                         transition["ac"] = demo["actions"][i]
                     else:
-                        transition["ac"] = gym.spaces.unflatten(
+                        transition["ac"] = gymnasium.spaces.unflatten(
                             ac_space, demo["actions"][i]
                         )
                     if "dones" in demo:

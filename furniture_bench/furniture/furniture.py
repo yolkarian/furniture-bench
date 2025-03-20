@@ -8,7 +8,7 @@ from typing import Optional, Tuple, List
 
 import numpy as np
 import numpy.typing as npt
-from gym import logger
+from gymnasium import logger
 
 import furniture_bench.utils.transform as T
 from furniture_bench.utils.pose import is_similar_pose

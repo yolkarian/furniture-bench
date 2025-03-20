@@ -3,7 +3,7 @@ Runs rollouts (RolloutRunner class) and collects transitions using Rollout class
 """
 
 import numpy as np
-import gym.spaces
+import gymnasium.spaces
 
 from .rollout import Rollout, RolloutRunner
 from ..utils import Logger, Info, Every
@@ -51,7 +51,7 @@ class DreamerRolloutRunner(RolloutRunner):
         ep_info = Info()
         rollout_len = 0
         episode = 0
-        dummy_ac = np.zeros(gym.spaces.flatdim(env.action_space))
+        dummy_ac = np.zeros(gymnasium.spaces.flatdim(env.action_space))
 
         while True:
             done = False
@@ -82,7 +82,7 @@ class DreamerRolloutRunner(RolloutRunner):
                 ep_rew += reward
                 ep_rew_rl += reward_rl
 
-                flat_ac = gym.spaces.flatten(env.action_space, ac)
+                flat_ac = gymnasium.spaces.flatten(env.action_space, ac)
                 rollout.add(dict(ob=ob_next, ac=flat_ac, done=done, rew=float(reward)))
                 rollout_len += 1
                 reward_info.add(info)
@@ -153,7 +153,7 @@ class DreamerRolloutRunner(RolloutRunner):
 
             reward_rl = reward * cfg.rolf.reward_scale
 
-            flat_ac = gym.spaces.flatten(env.action_space, ac)
+            flat_ac = gymnasium.spaces.flatten(env.action_space, ac)
             rollout.add(dict(ob=ob, ac=flat_ac, done=done, rew=reward))
 
             ep_len += 1

@@ -4,8 +4,9 @@ import argparse
 import pickle
 
 import furniture_bench
+from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv
 
-import gym
+import gymnasium as gym
 import cv2
 import torch
 import numpy as np
@@ -92,20 +93,22 @@ def main():
     args = parser.parse_args()
 
     # Create FurnitureSim environment.
-    env = gym.make(
-        args.env_id,
+    env = FurnitureSimEnv(
         furniture=args.furniture,
         num_envs=args.num_envs,
         resize_img=not args.high_res,
         init_assembled=args.init_assembled,
         record=args.record,
         headless=args.headless,
+        enable_reward=True,
+        enable_sensor=True,
         save_camera_input=args.save_camera_input,
         randomness=args.randomness,
         high_random_idx=args.high_random_idx,
         act_rot_repr=args.act_rot_repr,
         compute_device_id=args.compute_device_id,
         graphics_device_id=args.graphics_device_id,
+        april_tags = True,
     )
 
     # Initialize FurnitureSim.

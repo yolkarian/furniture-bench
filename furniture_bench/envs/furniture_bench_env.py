@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Union
 from pathlib import Path
 
-import gym
+import gymnasium as gym
 import cv2
 import numpy as np
 

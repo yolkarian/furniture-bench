@@ -1,7 +1,7 @@
 from typing import Dict
 
 import flax.linen as nn
-import gym
+import gymnasium as gym
 import numpy as np
 
 

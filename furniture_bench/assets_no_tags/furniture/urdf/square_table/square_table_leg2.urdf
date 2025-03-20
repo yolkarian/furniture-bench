@@ -3,12 +3,12 @@
     <link name="square_table_leg2">
         <visual>
             <geometry>
-                <mesh filename="../mesh/square_table/square_table_leg2.obj" scale="1 1 1"/>
+                <mesh filename="../../mesh/square_table/square_table_leg2.obj" scale="1 1 1"/>
             </geometry>
         </visual>
         <collision>
             <geometry>
-                <mesh filename="../mesh/square_table/square_table_leg2.obj" scale="1 1 1"/>
+                <mesh filename="../../mesh/square_table/square_table_leg2.obj" scale="1 1 1"/>
             </geometry>
             <!-- <sdf resolution="512"/> -->
         </collision>

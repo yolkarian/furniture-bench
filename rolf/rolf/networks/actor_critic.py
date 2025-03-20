@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gym.spaces
+import gymnasium.spaces
 
 from .distributions import Categorical, Normal, TanhNormal, MixedDistribution
 from .distributions import Identity, TanhIdentity
@@ -63,12 +63,12 @@ class Actor(nn.Module):
         self.fcs = nn.ModuleDict()
         self._dists = {}
         for k, v in ac_space.spaces.items():
-            output_dim = gym.spaces.flatdim(v)
-            if isinstance(v, gym.spaces.Box):
-                output_dim = gym.spaces.flatdim(v) * 2
+            output_dim = gymnasium.spaces.flatdim(v)
+            if isinstance(v, gymnasium.spaces.Box):
+                output_dim = gymnasium.spaces.flatdim(v) * 2
             self.fcs[k] = MLP(cfg.policy_mlp_dim[-1], output_dim, [], self._activation)
 
-            if isinstance(v, gym.spaces.Box):
+            if isinstance(v, gymnasium.spaces.Box):
                 if self._gaussian:
                     if self._tanh:
                         self._dists[k] = lambda m, s: TanhNormal(m, s, event_dim=1)
@@ -104,7 +104,7 @@ class Actor(nn.Module):
 
         means, stds = OrderedDict(), OrderedDict()
         for k, v in self._ac_space.spaces.items():
-            if isinstance(v, gym.spaces.Box):
+            if isinstance(v, gymnasium.spaces.Box):
                 mean, std = self.fcs[k](out).chunk(2, dim=-1)
                 std = F.softplus(std + self._raw_init_std) + self._min_std
                 std = torch.clamp(std, max=self._max_std)
@@ -143,7 +143,7 @@ class Critic(nn.Module):
 
         input_dim = self.encoder.output_dim
         if ac_space is not None:
-            input_dim += gym.spaces.flatdim(ac_space)
+            input_dim += gymnasium.spaces.flatdim(ac_space)
 
         self.fcs = nn.ModuleList()
         for _ in range(cfg.critic_ensemble):

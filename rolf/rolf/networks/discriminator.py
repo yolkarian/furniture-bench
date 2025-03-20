@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
-import gym.spaces
+import gymnasium.spaces
 
 from .utils import MLP
 
@@ -17,11 +17,11 @@ class Discriminator(nn.Module):
     ):
         super().__init__()
 
-        input_dim = gym.spaces.flatdim(ob_space)
+        input_dim = gymnasium.spaces.flatdim(ob_space)
         if ob_next_space:
-            input_dim += gym.spaces.flatdim(ob_next_space)
+            input_dim += gymnasium.spaces.flatdim(ob_next_space)
         if ac_space:
-            input_dim += gym.spaces.flatdim(ac_space)
+            input_dim += gymnasium.spaces.flatdim(ac_space)
 
         self.fc = MLP(input_dim, 1, mlp_dims, activation)
 

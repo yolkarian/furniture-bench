@@ -2,13 +2,7 @@
 Register FurnitureBench and FurnitureSim environments to OpenAI Gym.
 """
 
-from gym.envs.registration import register
-
-# Ignore ImportError from isaacgym.
-try:
-    import isaacgym
-except ImportError:
-    pass
+from gymnasium.envs.registration import register
 
 
 # FurnitureBench environment with full observation.
@@ -35,10 +29,6 @@ register(
     entry_point="furniture_bench.envs.furniture_sim_env:FurnitureSimEnv",
 )
 
-register(
-    id="FurnitureSimLegacy-v0",
-    entry_point="furniture_bench.envs.legacy_envs.furniture_sim_legacy_env:FurnitureSimEnvLegacy",
-)
 
 # FurnitureSim environment with all available observation.
 register(

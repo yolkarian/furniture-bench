@@ -14,7 +14,7 @@ import torchvision.utils as vutils
 import torchvision.transforms.functional as TF
 from torch.linalg import norm
 import PIL.Image
-import gym.spaces
+import gymnasium.spaces
 from mpi4py import MPI
 
 
@@ -274,16 +274,16 @@ def scale_dict_tensor(tensor, scalar):
 
 def space2tensor(batch_size, space, scalar, device):
     """Creates a tensor of shape `space` with value `scalar`."""
-    if isinstance(space, gym.spaces.Dict):
+    if isinstance(space, gymnasium.spaces.Dict):
         return OrderedDict(
             [
                 (k, space2tensor(batch_size, s, scalar, device))
                 for k, s in space.spaces.items()
             ]
         )
-    elif isinstance(space, gym.spaces.Box):
+    elif isinstance(space, gymnasium.spaces.Box):
         return scalar * torch.ones(batch_size + space.shape, device=device)
-    elif isinstance(space, gym.spaces.Discrete):
+    elif isinstance(space, gymnasium.spaces.Discrete):
         return scalar * torch.ones(batch_size + [1], device=device)
 
 

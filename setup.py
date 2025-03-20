@@ -6,9 +6,9 @@ long_description = (Path(__file__).parent / "README.md").read_text()
 
 core_requirements = [
     "opencv-python",
-    #    "pynput",
     # "gym==0.21.0",
-    "gym==0.22.0",
+    "gymnasium==0.29.1",
+    "pynput==1.7.7",
     "joblib",
     "numba",
     "pyrealsense2",
@@ -28,6 +28,6 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(),
     include_package_data=True,
-    python_requires=">3.7,<3.9",
+    python_requires=">3.8,<3.10",
     install_requires=core_requirements,
 )

@@ -5,7 +5,7 @@ import furniture_bench
 
 import numpy as np
 import torch
-import gym
+import gymnasium as gym
 from absl import app, flags
 
 

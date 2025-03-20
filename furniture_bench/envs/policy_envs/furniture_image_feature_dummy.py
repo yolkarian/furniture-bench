@@ -1,5 +1,5 @@
 import numpy as np
-from gym import spaces
+from gymnasium import spaces
 
 from furniture_bench.config import config
 from furniture_bench.envs.policy_envs.furniture_dummy_base import FurnitureDummyBase

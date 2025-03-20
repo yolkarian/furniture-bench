@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import gym.spaces
+import gymnasium.spaces
 from torch.optim.lr_scheduler import StepLR
 
 from .base_agent import BaseAgent
@@ -83,7 +83,7 @@ class DDPGAgent(BaseAgent):
             return ac, None
 
         for k, v in self._ac_space.spaces.items():
-            if isinstance(v, gym.spaces.Box):
+            if isinstance(v, gymnasium.spaces.Box):
                 ac[k] = ac[k] + self._cfg.expl_noise * np.random.randn(*ac[k].shape)
                 ac[k] = np.clip(ac[k], v.low, v.high)
                 # np.float64 action raises out-of-range exception in gym
