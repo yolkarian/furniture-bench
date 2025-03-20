@@ -8,7 +8,7 @@
 
 FurnitureBench is the real-world furniture assembly benchmark, which aims at providing a reproducible and easy-to-use platform for long-horizon complex robotic manipulation.
 
-This is a fork of FurnitureBench. The main difference in this fork is that it utilizes [SAPIAN](https://github.com/haosulab/SAPIEN) as simulator for FurnitureSim with supporting of Python3.9+. (For this installation, please refer to [FurnitureSim section](#FurnitureSim)) and also guide and tutorials in the [online document](https://clvrai.github.io/furniture-bench/docs/index.html) of the original auther.
+This is a fork of FurnitureBench. The main difference in this fork is that it utilizes [SAPIEN](https://github.com/haosulab/SAPIEN) as the simulator for FurnitureSim with support for Python 3.9+. (For this installation, please refer to [FurnitureSim section](#FurnitureSim)) and also guide and tutorials in the [online document](https://clvrai.github.io/furniture-bench/docs/index.html) of the original author.
 
 It features
 - Long-horizon complex manipulation tasks
@@ -34,7 +34,7 @@ FurnitureSim in this fork is a simulator based on SAPIEN. FurnitureSim works on 
 ### SAPIEN Installation 
 For the installation of FurnitureSim of this branch, please download the wheels in releases of this [repository](https://github.com/yolkarian/SAPIEN) (Customized SAPIEN simulator with fixed URDF loader) and use `pip` to install.
 
-You might not need CUDA for the installation of SAPIEN but NVIDIA GPU is needed since we enforce GPU simulation for FurnitureSim and Driver of NVIDIA GPU should meet some requirements. Please find the detail on this [page](https://sapien-sim.github.io/docs/user_guide/getting_started/installation.html)
+You might not need CUDA for the installation of SAPIEN but NVIDIA GPU is needed since we enforce GPU simulation for FurnitureSim. In addition, the NVIDIA GPU driver should meet some requirements. Please find the details on this [page](https://sapien-sim.github.io/docs/user_guide/getting_started/installation.html)
 
 ### FurnitureBench Installation
 
@@ -54,8 +54,8 @@ pip install -e .
 
 - More realistic Rasterization-based Render (New Shader)
 - Removal of Isaacgym in bash scripts
-- Record Recording during the simulation
-- Evaluation with approaches from the original FurnitureBench.
+- Recording during the simulation
+- Evaluation with approaches from the original FurnitureBench
 - Test reinforcement learning (fine-tuning) in the environment
 
 
