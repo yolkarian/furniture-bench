@@ -1,4 +1,4 @@
-name: py38
+name: py39
 channels:
   - fair-robotics
   - anaconda
@@ -8,3 +8,4 @@ channels:
   - defaults
 dependencies:
   - polymetis
+  - python=3.9
