@@ -1732,13 +1732,13 @@ class FurnitureSimRLEnv(gym.Env):
     def step(
         self, action: torch.Tensor, sample_perturbations: bool = False
     ) -> Tuple[dict, torch.Tensor, torch.Tensor, dict]:
-        obs = self.get_observation()
         self.update_action(action)
         self._apply_all()
         for _ in range(self.sim_steps):
             self.physx_system.step()
         self._fetch_all()
         self.update_render()
+        obs = self.get_observation()
         reward = self._reward()
         done = self._done()
         self.env_steps += 1
