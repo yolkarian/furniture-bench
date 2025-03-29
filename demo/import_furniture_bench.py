@@ -20,7 +20,7 @@ if __name__=="__main__":
                           init_assembled=True,
                           enable_sensor=False, 
                           camera_shader="minimal",
-                          viewer_shader="rt",
+                          viewer_shader="default",
                           action_type="delta",
                           april_tags=True)
 
@@ -32,13 +32,15 @@ if __name__=="__main__":
 
     while not sim.viewer.closed:
 
-        if sim.env_steps[0] >= 200:
+        if sim.env_steps[0] >= 20 and sim.env_steps[0] < 120 :
             action[:, -1] -= 0.001
-            action[:, 0] -= 0.0005 * sim.dt
+            action[:, 0] -= 0.05 * sim.dt
 
-        if sim.env_steps[0] >= 1000 and is_reset :
+        if sim.env_steps[0] >= 120 and is_reset :
             sim.reset()
+            action[:, :] = 0
             is_reset = False
+        print(sim.env_steps.max())
         obs,reward,done,info = sim.step(action)
     
 

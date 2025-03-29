@@ -462,7 +462,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.ground_builder.add_plane_visual(
             sapien.Pose(p=[0, 0, 0], q=[0.7071068, 0, -0.7071068, 0]),
             [10, 10, 10],
-            [0.0, 1.0, 1.0],
+            [0.1, 0.1, 0.1],
             "ground_visual",
         )
 
@@ -713,16 +713,23 @@ class FurnitureSimRLEnv(gym.Env):
                 entity = sapien.Entity()
                 entity.name = "directional_light"
                 direct_light = sapien.render.RenderDirectionalLightComponent()
-                entity.add_component(direct_light)
+                
                 direct_light.set_color(light["color"])
+                direct_light.shadow = True
+                direct_light.shadow_near = -10.0
+                direct_light.shadow_far = 10.0
+                direct_light.shadow_half_size = 10.0
+                direct_light.shadow_map_size = 2048
                 light_position = np.zeros(3, dtype=np.float32)
+                entity.add_component(direct_light)
                 direct_light.set_entity_pose(
-                    sapien.Pose(
-                        light_position,
-                        sapien.math.shortest_rotation([1, 0, 0], light["direction"]),
-                    )
+                        sapien.Pose(
+                        light_position, sapien.math.shortest_rotation([1, 0, 0], light["direction"])
+                        )
                 )
-
+                # NOTE(Yuke): Quaternion for this pose make the vector rotate from [1,0,0] to direction following OpenGL convention.
+                # This is different from the convention in PhysX. It means the direction should be the direction in the OpenGL coordinate.
+    
                 scene.add_entity(entity)
                 # NOTE(Yuke): for rendering in a single scenario
                 if self.parallel_in_single_scene:

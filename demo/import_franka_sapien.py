@@ -17,8 +17,8 @@ def demo(fix_root_link, disable_gravity, balance_passive_force):
     scene = sapien.Scene([px, rs])
     scene.add_ground(0, render_material=(0.0, 1.0, 1.0))
 
-    scene.set_ambient_light([0.5, 0.5, 0.5])
-    scene.add_directional_light([0, 1, -1], [0.5, 0.5, 0.5])
+    scene.set_ambient_light([0.1, 0.1, 0.1])
+    scene.add_directional_light([0, 1, -1], [0.5, 0.5, 0.5], shadow=True)
 
     viewer = scene.create_viewer()
     pose = sapien.Pose(p=[-2, 0, 1])
