@@ -94,6 +94,8 @@ class FurnitureSimRLEnv(gym.Env):
         enable_reward: bool = True,
         april_tags: bool = False,
         perturbation_prob: float = 0.01,
+        concat_robot_state: bool = False,
+        channel_first:bool = False, # TODO: to implement
         **kwargs: dict,  # dict which is used to catch extra params
     ):
         self.furniture_name = furniture
@@ -114,6 +116,8 @@ class FurnitureSimRLEnv(gym.Env):
         self.parallel_in_single_scene = parallel_in_single_scene
         self.manual_done = manual_done
         self.init_assembled: bool = init_assembled  # If true, the environment is initialized and reset without randomness
+        self.concat_robot_state = concat_robot_state
+        self.channel_first = channel_first
         self.camera_shader = (
             SHADER_DICT[camera_shader]
             if camera_shader is not None
@@ -369,7 +373,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.urdf_loader = URDFLoader()  # just used to generate builder
         self.render_system_group: Optional[Union[sapien.render.RenderSystemGroup, sapien.render.RenderSystem]] = None
         # Simulation Step
-        self.env_steps = np.zeros(self.num_envs, dtype=np.int32)
+        self.env_steps = torch.zeros(self.num_envs, dtype=torch.int, device = self.device)
 
         # %% Create builder
 
@@ -1299,7 +1303,7 @@ class FurnitureSimRLEnv(gym.Env):
     def get_observation(self) -> dict:
         obs = {}
 
-        obs["robot_state"] = self.get_robot_state()
+        obs["robot_state"] = torch.cat(list(self.get_robot_state().values()), -1) if self.concat_robot_state else self.get_robot_state()
         if self.render_system_group is not None:
             obs.update(self.get_sensor_obs().items())
 
@@ -2140,102 +2144,39 @@ class FurnitureSimRLEnv(gym.Env):
     @property
     def observation_space(self):
         low, high = -np.inf, np.inf
-        dof = self.franka_num_dof
-        img_size = config["furniture"]["env_img_size"]
-        observation_space = {}
-        full_robot_state_space = {
-            "ee_pos": gym.spaces.Box(
-                low=low,
-                high=high,
-                shape=(
-                    self.num_envs,
-                    3,
-                ),
-            ),  # (x, y, z)
-            "ee_quat": gym.spaces.Box(
-                low=low,
-                high=high,
-                shape=(
-                    self.num_envs,
-                    4,
-                ),
-            ),  #  (x, y, z, w)
-            "ee_pos_vel": gym.spaces.Box(
-                low=low,
-                high=high,
-                shape=(
-                    self.num_envs,
-                    3,
-                ),
-            ),
-            "ee_ori_vel": gym.spaces.Box(
-                low=low,
-                high=high,
-                shape=(
-                    self.num_envs,
-                    3,
-                ),
-            ),
-            "joint_positions": gym.spaces.Box(
-                low=low,
-                high=high,
-                shape=(
-                    self.num_envs,
-                    dof,
-                ),
-            ),
-            "joint_velocities": gym.spaces.Box(
-                low=low,
-                high=high,
-                shape=(
-                    self.num_envs,
-                    dof,
-                ),
-            ),
-            "joint_torques": gym.spaces.Box(
-                low=low,
-                high=high,
-                shape=(
-                    self.num_envs,
-                    dof,
-                ),
-            ),
-            "gripper_width": gym.spaces.Box(low=low, high=high, shape=(self.num_envs,)),
-            "gripper_finger_1_pos": gym.spaces.Box(
-                low=low, high=high, shape=(self.num_envs,)
-            ),
-            "gripper_finger_2_pos": gym.spaces.Box(
-                low=low, high=high, shape=(self.num_envs,)
-            ),
-        }
-        robot_state_space = gym.spaces.Dict(
-            {
-                key: value
-                for key, value in full_robot_state_space.items()
-                if key in self.robot_state_keys
-            }
-        )
-        observation_space["robot_state"] = robot_state_space
-        if self.render_system_group is not None:
-            for key in self.obs_keys:
-                if key.startswith("color"):
-                    observation_space[key] = gym.spaces.Box(
-                        low=0, high=255, shape=(self.num_envs, *img_size, 3)
-                    )
-                if key.startswith("depth"):
-                    observation_space[key] = gym.spaces.Box(
-                        low=low, high=high, shape=(self.num_envs, *img_size)
-                    )
-        if self.include_parts_poses:
-            observation_space["parts_poses"] = gym.spaces.Box(
-                low=low,
-                high=high,
-                shape=(
-                    self.num_envs,
-                    self.furniture.num_parts * self.pose_dim,
-                ),
-            )
-        return gym.spaces.Dict(observation_space)
+
+        # Now we also include the obstacle in the pose list.
+        parts_poses = (
+            self.furniture.num_parts + int(self.include_parts_poses)
+        ) * self.pose_dim
+        img_size = reversed(self.img_size)
+        img_shape = (3, *img_size) if self.channel_first else (*img_size, 3)
+
+        obs_dict = {}
+        robot_state = {}
+        robot_state_dim = 0
+        for k in self.obs_keys:
+            if k.startswith("robot_state"):
+                obs_key = k.split("/")[1]
+                obs_shape = (ROBOT_STATE_DIMS[obs_key],)
+                robot_state_dim += ROBOT_STATE_DIMS[obs_key]
+                robot_state[obs_key] = gym.spaces.Box(low, high, obs_shape)
+            elif k.startswith("color"):
+                obs_dict[k] = gym.spaces.Box(0, 255, img_shape)
+            elif k.startswith("depth"):
+                obs_dict[k] = gym.spaces.Box(0, 255, img_size)
+            elif k == "parts_poses":
+                obs_dict[k] = gym.spaces.Box(low, high, (parts_poses,))
+            else:
+                raise ValueError(f"FurnitureSim does not support observation ({k}).")
+
+        if robot_state:
+            if self.concat_robot_state:
+                obs_dict["robot_state"] = gym.spaces.Box(low, high, (robot_state_dim,))
+            else:
+                obs_dict["robot_state"] = gym.spaces.Dict(robot_state)
+
+        return gym.spaces.Dict(obs_dict)
 
 
 
