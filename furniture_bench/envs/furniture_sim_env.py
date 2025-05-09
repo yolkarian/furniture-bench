@@ -65,8 +65,13 @@ ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets_no_tags")
 # TODO:
 #       Add randomness of obstacle, given that the full observations include the pose of obstacles
 #       Investigation the difference between Isaac Gym and Sapien in Operation
-#       Implement Sensor with different Shader (For different Shader, the operation to read data is different)
 #       Turn off RenderGroup when num_env == 1
+
+# TODO: Implement API for offline rendering (important!!)
+#       1. Set Robot according to observation
+#       2. Collision Mesh free Loading.
+#       3. Rendering only update
+
 
 # NOTE(Yuke): Regarding the unit of depth image, please check the comment in `furniture_bench.utils.sapien.camera`
 
@@ -96,6 +101,7 @@ class FurnitureSimRLEnv(gym.Env):
         perturbation_prob: float = 0.01,
         concat_robot_state: bool = False,
         channel_first:bool = False, # TODO: to implement
+        high_random_idx: int = 0,
         **kwargs: dict,  # dict which is used to catch extra params
     ):
         self.furniture_name = furniture
@@ -137,6 +143,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.device = torch.device("cuda")
         self.sapien_device = sapien.Device(self.device.type)
         self.assemble_idx = 0
+        self.high_random_idx:int = high_random_idx
         self.move_neutral = False
         # osc is not supported
         assert self.ctrl_mode == "diffik"
@@ -712,7 +719,7 @@ class FurnitureSimRLEnv(gym.Env):
     def _add_light(self):
         for light in sim_config["lights"]:
             for scene in self.scenes:
-                scene.render_system.ambient_light = light["ambient"]
+                scene.render_system.set_ambient_light(light["ambient"])
             for scene in self.scenes:
                 entity = sapien.Entity()
                 entity.name = "directional_light"
@@ -744,7 +751,6 @@ class FurnitureSimRLEnv(gym.Env):
         self.sensor_keys: Dict[str, Set[str]] = {}
         # camera_obs = {}
         # This camera can access depth information as well
-        set_shader(self.camera_shader)
 
         def create_camera(name: str, i: int) -> sapien.render.RenderCameraComponent:
             scene = self.scenes[i]
@@ -936,7 +942,7 @@ class FurnitureSimRLEnv(gym.Env):
             for part_entities in self.part_entities.values()
             for part_entity in part_entities
         ]
-        render_bodies += [
+        franka_render_bodies = [
             (
                 link.entity.find_component_by_type(sapien.render.RenderBodyComponent),
                 link.gpu_pose_index,
@@ -944,7 +950,7 @@ class FurnitureSimRLEnv(gym.Env):
             for franka_entity in self.franka_entities
             for link in franka_entity.links
         ]
-
+        render_bodies += franka_render_bodies
         return render_bodies
 
     def get_reset_pose_part(self, part: Part) -> Tuple[np.ndarray, np.ndarray]:
@@ -1858,7 +1864,6 @@ class FurnitureSimRLEnv(gym.Env):
             sim_config["robot"]["gripper_torque"],
             -sim_config["robot"]["gripper_torque"],
         )
-
         target_qpos[:, :7] = self.step_ctrl(state_dict)["joint_positions"]
         target_qpos[:, 7:9] = torch.where(
             gripper_action_mask,
@@ -1877,8 +1882,18 @@ class FurnitureSimRLEnv(gym.Env):
         )
 
     def update_render(self):
+        # NOTE: Only with RenderSystemGroup, GPU Render can directly access physics info from GPU
+        #   Otherwise, even though render might use GPU, it needs loads physics info from CPU
+        if self.viewer is not None or (self.num_envs == 1 and self.render_system_group is not None):
+            self.physx_system.sync_poses_gpu_to_cpu()
         self.step_viewer()
         self.step_sensor()
+
+    # NOTE(Yuke):
+    #      Update Steps for Rendering:
+    #           1. step(), update_render(): Update Rendering System (Load Data from PhyxSystem to RenderSystem, Rendering)
+    #           2. take_picture(): Generate Output sensor group or sensors 
+    #           3. get_picture_cuda(): Obtain results from buffer
 
     def step_sensor(self):
         if self.render_system_group is None:
@@ -1889,6 +1904,8 @@ class FurnitureSimRLEnv(gym.Env):
                 sensors[0].take_picture()
             return
         self.render_system_group.update_render()
+        for name in self.sensors.keys():
+            self.sensor_groups[name].take_picture()
 
     def _reward(self) -> torch.Tensor:
         """Reward is 1 if two parts are newly assembled."""
@@ -2243,13 +2260,13 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
     def step(
         self, action: torch.Tensor, sample_perturbations: bool = False
     ) -> Tuple[dict, torch.Tensor, torch.Tensor, dict]:
-        obs = self.get_observation()
         self.update_action(action)
         self._apply_all()
         for _ in range(self.sim_steps):
             self.physx_system.step()
         self._fetch_all()
         self.update_render()
+        obs = self.get_observation()
         reward = self._reward()
         done = self._done()
         self.env_steps += 1
@@ -2258,6 +2275,7 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
                 self.max_force_magnitude,
                 self.max_torque_magnitude,
             )
+        
         return (
             obs,
             reward,
