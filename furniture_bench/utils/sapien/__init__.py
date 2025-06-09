@@ -126,12 +126,37 @@ def generate_builder_with_options_(loader:URDFLoader,urdf_path:str,options:Asset
 
 def camera_pose_from_look_at(pos:np.ndarray, target:np.ndarray)->sapien.Pose:
     vec = target.astype(np.float32) - pos.astype(np.float32)
-    vec = vec / np.linalg.norm(vec)
+    vec_normed = vec / np.linalg.norm(vec)
     pose = sapien.Pose(p = pos.astype(np.float32))
     rot,_ = scipy.spatial.transform.Rotation.align_vectors(vec, [1, 0, 0])
     if vec[0] < 0:
         quat = np.zeros(4, dtype = np.float32)
-        quat[:3] = vec
-        rot =  rot * scipy.spatial.transform.Rotation.from_quat(quat) 
+        quat[:3] = vec_normed
+        rot = scipy.spatial.transform.Rotation.from_quat(quat) * rot
     pose.set_rpy(rot.as_euler("xyz").astype(np.float32))
     return pose
+
+
+def set_metalic_material(material:sapien.render.RenderMaterial):
+    material.set_roughness(0.3)
+    material.set_specular(0.5)
+    material.set_metallic(0.3)
+    material.set_transmission(0.1)
+
+def set_rough_material(material:sapien.render.RenderMaterial):
+    material.set_roughness(0.9)
+    material.set_specular(0.1)
+    material.set_metallic(0.0)
+    material.set_transmission(0.0)
+
+def set_plastic_material(material:sapien.render.RenderMaterial):
+    material.set_roughness(0.3)
+    material.set_specular(0.5)
+    material.set_metallic(0.3)
+    material.set_transmission(0.02)
+
+def set_glass_material(material:sapien.render.RenderMaterial):
+    material.set_roughness(0.05)
+    material.set_specular(0.9)
+    material.set_metallic(0.0)
+    material.set_transmission(0.95)

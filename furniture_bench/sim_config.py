@@ -76,7 +76,7 @@ class CameraCfg:
     name:Optional[str] = None
     width:int = 1280
     height:int = 720
-    fovy:float = 40.0
+    fovy:float = np.deg2rad(40)
     near:float = 0.001
     far:float = 2.0
 

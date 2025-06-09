@@ -9,6 +9,10 @@ import sapien.utils.viewer.control_window
 from furniture_bench.utils.sapien import (
     generate_builder_with_options_,
     camera_pose_from_look_at,
+    set_glass_material,
+    set_metalic_material,
+    set_plastic_material,
+    set_rough_material
 )
 from furniture_bench.utils.sapien.camera import (
     SHADER_DICT,
@@ -473,7 +477,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.ground_builder.add_plane_visual(
             sapien.Pose(p=[0, 0, 0], q=[0.7071068, 0, -0.7071068, 0]),
             [10, 10, 10],
-            [0.1, 0.1, 0.1],
+            sapien.render.RenderMaterial(base_color=[1, 1, 1, 1] , specular=0.3, roughness=0.5, metallic=0.0),
             "ground_visual",
         )
 
@@ -625,6 +629,17 @@ class FurnitureSimRLEnv(gym.Env):
                 ).set_max_depenetration_velocity(
                     sim_config["sim_params"].physx.max_depenetration_velocity
                 )
+                render_body:sapien.render.RenderBodyComponent = obj_entity.find_component_by_type( # type: ignore
+                    sapien.render.RenderBodyComponent
+                )
+                if render_body:
+                    for render_shape in render_body.render_shapes:
+                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                            for part in render_shape.parts:
+                                set_rough_material(part.material)
+                        else:
+                            set_rough_material(render_shape.material)
+
                 self.static_obj_entites[key].append(obj_entity)
                 if self.parallel_in_single_scene:
                     value.set_name(tmp_name)
@@ -646,9 +661,20 @@ class FurnitureSimRLEnv(gym.Env):
                 ).set_max_depenetration_velocity(
                     sim_config["sim_params"].physx.max_depenetration_velocity
                 )
-                if self.parallel_in_single_scene:
-                    value.set_name(tmp_name)
-                    value.initial_pose.set_p(tmp_initial_p)
+                render_body:sapien.render.RenderBodyComponent = part_entity.find_component_by_type( # type: ignore
+                    sapien.render.RenderBodyComponent
+                )
+                if render_body:
+                    for render_shape in render_body.render_shapes:
+                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                            for part in render_shape.parts:
+                                set_plastic_material(part.material)
+                        else:
+                            set_plastic_material(render_shape.material)
+
+                    if self.parallel_in_single_scene:
+                        value.set_name(tmp_name)
+                        value.initial_pose.set_p(tmp_initial_p)
 
             self.frank_builder.set_scene(scene)
             if self.parallel_in_single_scene:
@@ -676,6 +702,16 @@ class FurnitureSimRLEnv(gym.Env):
                     ).set_max_depenetration_velocity(
                         sim_config["sim_params"].physx.max_depenetration_velocity
                     )
+                    render_body:sapien.render.RenderBodyComponent = link.entity.find_component_by_type( # type: ignore
+                        sapien.render.RenderBodyComponent
+                    )
+                    if render_body:
+                        for render_shape in render_body.render_shapes:
+                            if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                                for part in render_shape.parts:
+                                    set_metalic_material(part.material)
+                            else:
+                                set_metalic_material(render_shape.material)
                     if link.name.endswith("k_ee_link"):
                         self.ee_link_index: int = link.get_index()
                 # NOTE(Yuke): we don't use integrated pinocchino of sapien to compute jacobian of end effector
@@ -755,10 +791,16 @@ class FurnitureSimRLEnv(gym.Env):
         def create_camera(name: str, i: int) -> sapien.render.RenderCameraComponent:
             scene = self.scenes[i]
             cfg = CameraCfg()
+            cfg.width = self.img_size[0]
+            cfg.height = self.img_size[1]
+            cfg.near = 0.001
+            cfg.far = 2.0
+            cfg.fovy = np.deg2rad(40.0) if self.resize_img else np.deg2rad(69.4)
+
 
             if name == "wrist":
                 if self.resize_img:
-                    cfg.fovy = 55.0
+                    cfg.fovy = np.deg2rad(55.0)
                 pose = sapien.Pose(p=[-0.04, 0, -0.05])
                 pose.set_rpy([0, np.radians(-70.0), 0])
                 camera = sapien.render.RenderCameraComponent(
