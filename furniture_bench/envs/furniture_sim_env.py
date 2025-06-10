@@ -14,6 +14,7 @@ from furniture_bench.utils.sapien import (
     set_plastic_material,
     set_rough_material
 )
+import math
 from furniture_bench.utils.sapien.camera import (
     SHADER_DICT,
     set_shader,
@@ -25,6 +26,7 @@ import numpy as np
 from numpy.typing import NDArray
 from typing import Dict, Union
 from pathlib import Path
+from datetime import datetime
 
 from furniture_bench.furniture.furniture import Furniture
 from furniture_bench.utils.recorder import VideoRecorder
@@ -98,13 +100,14 @@ class FurnitureSimRLEnv(gym.Env):
         manual_done: bool = False,
         camera_shader: Optional[Literal["default", "minimal", "rt"]] = None,
         viewer_shader: Optional[Literal["default", "minimal", "rt"]] = None,
-        record: bool = False,  #  TODO: Video Recording for this repository
+        record: bool = False,  #  NOTE: call if reset is called, it restarts a new recording and overwrites the record before.
+        record_dir: Optional[str] = None,
         save_camera_input: bool = False,
         enable_reward: bool = True,
         april_tags: bool = False,
         perturbation_prob: float = 0.01,
         concat_robot_state: bool = False,
-        channel_first:bool = False, # TODO: to implement
+        channel_first:bool = False, # TODO: to implement, by default it is not channel_first
         high_random_idx: int = 0,
         **kwargs: dict,  # dict which is used to catch extra params
     ):
@@ -138,6 +141,9 @@ class FurnitureSimRLEnv(gym.Env):
             if viewer_shader is not None
             else SHADER_DICT["default"]
         )
+        self.record = record
+
+
         self.ctrl_mode = ctrl_mode
         self.enable_reward = enable_reward
         if april_tags:
@@ -359,6 +365,32 @@ class FurnitureSimRLEnv(gym.Env):
             "resized_img_size" if self.resize_img else "color_img_size"
         ]
 
+        # recording parameters
+        if self.record:
+            if "color_image1" not in self.obs_keys:
+                print(
+                    "Adding wrist camera images to the observation keys since recording is enabled."
+                )
+                self.obs_keys.append("color_image1")
+            if "color_image2" not in self.obs_keys:
+                print(
+                    "Adding wrist camera images to the observation keys since recording is enabled."
+                )
+                self.obs_keys.append("color_image2")
+
+            if record_dir is None:
+                record_dir = Path("sim_record") / datetime.now().strftime("%Y%m%d-%H%M%S")
+            else:
+                record_dir = Path(record_dir)
+            record_dir.mkdir(parents=True, exist_ok=True)
+            self.recorder = VideoRecorder(  # NOTE: recorder only records the video of the first env
+                record_dir / "video.mp4",
+                fps=30,
+                width=self.img_size[1] * 2,
+                height=self.img_size[0],
+                channel_first=self.channel_first,
+                )
+
         # %% General Setup of Simulator
         sim_params: SimParams = sim_config["sim_params"]
         sapien.physx.enable_gpu()
@@ -422,8 +454,8 @@ class FurnitureSimRLEnv(gym.Env):
 
         self.act_low = torch.from_numpy(self.action_space.low).to(device=self.device)
         self.act_high = torch.from_numpy(self.action_space.high).to(device=self.device)
-        self.sim_steps = int(
-            1.0 / config["robot"]["hz"] / sim_config["sim_params"].dt + 0.1
+        self.sim_steps = math.ceil(
+            1.0 / config["robot"]["hz"] / sim_config["sim_params"].dt
         )
         print(f"Control per {self.sim_steps} Step(s)")
 
@@ -1494,6 +1526,10 @@ class FurnitureSimRLEnv(gym.Env):
 
         self.reward = torch.zeros((self.num_envs, 1), dtype=torch.float32)
         self.done = torch.zeros((self.num_envs, 1), dtype=torch.bool)
+
+        if self.record:
+            self.recorder.restart_recording()
+            self.recorder.record_frame(obs)
         return obs
 
     def refresh(self):
@@ -1798,6 +1834,8 @@ class FurnitureSimRLEnv(gym.Env):
         self._fetch_all()
         self.update_render()
         obs = self.get_observation()
+        if self.record:
+            self.recorder.record_frame(obs)
         reward = self._reward()
         done = self._done()
         self.env_steps += 1
@@ -2237,6 +2275,10 @@ class FurnitureSimRLEnv(gym.Env):
 
         return gym.spaces.Dict(obs_dict)
 
+    def __del__(self):
+        if self.record:
+            self.recorder.stop_recording()
+
 
 
 
@@ -2309,6 +2351,8 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
         self._fetch_all()
         self.update_render()
         obs = self.get_observation()
+        if self.record:
+            self.recorder.record_frame(obs)
         reward = self._reward()
         done = self._done()
         self.env_steps += 1
