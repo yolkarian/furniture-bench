@@ -1656,6 +1656,9 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_apply_articulation_target_position()
         self.physx_system.gpu_apply_articulation_target_velocity()
 
+    def set_franka(self, dof_pos:torch.Tensor):
+        self._reset_franka(dof_pos = dof_pos)
+
     def _reset_parts(
         self,
         env_idx: int,
@@ -1781,6 +1784,130 @@ class FurnitureSimRLEnv(gym.Env):
         # Reset root state for actors in a single env
         self.physx_system.gpu_apply_rigid_dynamic_data()
 
+    # TODO: Vectorizated reset & Quaternion Setting for Observation
+    def set_parts_env(
+            self,
+            env_idx: int,
+            parts_poses: np.ndarray,
+    ):
+        """Resets furniture parts to the initial pose.
+        part_poses: quaternion xyzw"""
+
+
+        for part_idx, part in enumerate(self.furnitures[env_idx].parts):
+            # Use the given pose.
+
+            part_pose = parts_poses[part_idx * 7 : (part_idx + 1) * 7]
+
+            pos = part_pose[:3]
+            ori = T.to_homogeneous(
+                [0, 0, 0], T.quat2mat(part_pose[3:])
+            )  # Dummy zero position.
+
+            # NOTE(Yuke): recalculation instead of directly using self.part_default_pose,
+            #          since self._get_reset_pose_part can obtain pos and ori with randomness
+            part_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
+            part_pose = sapien.Pose()
+            part_pose.set_p(
+                [part_pose_mat[0, 3], part_pose_mat[1, 3], part_pose_mat[2, 3]]
+            )
+            reset_ori = self.april_coord_to_sim_coord(ori)
+            part_pose.set_q(
+                np.roll(T.mat2quat(reset_ori[:3, :3]), 1, axis=-1).astype(np.float32)
+            )
+            idxs = self.parts_gpu_index[part.name][env_idx]
+
+            # Load the Pose into buffer (offset)
+            if self.parallel_in_single_scene:
+                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = torch.tensor(
+                    part_pose.p + self.scene_offsets_np[env_idx], device=self.device
+                )
+            else:
+                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = torch.tensor(
+                    part_pose.p, device=self.device
+                )
+            self.physx_system.cuda_rigid_body_data.torch()[idxs, 3:7] = torch.tensor(
+                part_pose.q,
+                device=self.device,
+            )
+            # linear vel and rot vel to zero
+            self.physx_system.cuda_rigid_body_data.torch()[idxs, 7:] = 0
+            self.physx_system.cuda_rigid_body_force.torch()[:, :] = 0
+            self.physx_system.cuda_rigid_body_torque.torch()[:, :] = 0
+
+        # Get the obstacle poses, last 7 numbers in the parts_poses tensor
+
+        if parts_poses is not None:
+            obstacle_pose = parts_poses[-7:]
+            pos = obstacle_pose[:3]
+            ori = T.to_homogeneous([0, 0, 0], T.quat2mat(obstacle_pose[3:]))
+            # Convert the obstacle pose from AprilTag to simulator coordinate system
+            obstacle_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
+            obstacle_pose = sapien.Pose()
+            obstacle_pose.set_p(
+                (
+                    obstacle_pose_mat[0, 3],
+                    obstacle_pose_mat[1, 3],
+                    obstacle_pose_mat[2, 3],
+                )
+            )
+            reset_ori = self.april_coord_to_sim_coord(ori)
+            obstacle_pose.set_q(
+                np.roll(T.mat2quat(reset_ori[:3, :3]), shift=1, axis=-1).astype(
+                    np.float32
+                )
+            )
+        else:
+            obstacle_pose = self.obstacle_front_pose
+
+        # Calculate the offsets for the front and side obstacles
+        obstacle_right_offset = np.array((-0.075, -0.175, 0), dtype=np.float32)
+        obstacle_left_offset = np.array((-0.075, 0.175, 0), dtype=np.float32)
+
+        # Write to GPU buffer. Since obstacles are static objects, no need to reset velocity
+        if self.parallel_in_single_scene:
+            self.physx_system.cuda_rigid_body_data.torch()[
+            self.obstacle_gpu_index["obstacle_front"][env_idx], :3
+            ] = torch.from_numpy(obstacle_pose.p + self.scene_offsets_np[env_idx]).to(
+                dtype=torch.float32, device=self.device
+            )
+
+            self.physx_system.cuda_rigid_body_data.torch()[
+            self.obstacle_gpu_index["obstacle_right"][env_idx], :3
+            ] = torch.from_numpy(
+                obstacle_pose.p + obstacle_right_offset + self.scene_offsets_np[env_idx]
+            ).to(dtype=torch.float32, device=self.device)
+
+            self.physx_system.cuda_rigid_body_data.torch()[
+            self.obstacle_gpu_index["obstacle_left"][env_idx], :3
+            ] = torch.from_numpy(
+                obstacle_pose.p + obstacle_left_offset + self.scene_offsets_np[env_idx]
+            ).to(dtype=torch.float32, device=self.device)
+        else:
+            self.physx_system.cuda_rigid_body_data.torch()[
+            self.obstacle_gpu_index["obstacle_front"][env_idx], :3
+            ] = torch.from_numpy(obstacle_pose.p).to(
+                dtype=torch.float32, device=self.device
+            )
+
+            self.physx_system.cuda_rigid_body_data.torch()[
+            self.obstacle_gpu_index["obstacle_right"][env_idx], :3
+            ] = torch.from_numpy(obstacle_pose.p + obstacle_right_offset).to(
+                dtype=torch.float32, device=self.device
+            )
+
+            self.physx_system.cuda_rigid_body_data.torch()[
+            self.obstacle_gpu_index["obstacle_left"][env_idx], :3
+            ] = torch.from_numpy(obstacle_pose.p + obstacle_left_offset).to(
+                dtype=torch.float32, device=self.device
+            )
+
+
+
+
+        # Reset root state for actors in a single env
+        self.physx_system.gpu_apply_rigid_dynamic_data()
+
     def step_viewer(self):
         if self.viewer is None:
             return
@@ -1850,6 +1977,25 @@ class FurnitureSimRLEnv(gym.Env):
             done,
             {"obs_success": True, "action_success": True},
         )
+
+    def render_only_step(self, franka_dof_pos: torch.Tensor, parts_poses:np.ndarray)->Dict[str, torch.Tensor]:
+        """
+        Set poses of all parts into the given poses and update render to obtain
+        the rendered updates
+        Args:
+            franka_dof_pos: The Pos of all dofs of franka
+            parts_pos: part poses
+
+        Returns: Standard Observation including the rendered image
+
+        """
+        self.set_franka(franka_dof_pos)
+        for i in range(self.num_envs):
+            self.set_parts_env(i, parts_poses[i]) # TODO: check whether to index first or afterwards
+        self._apply_all()
+        self.update_render()
+        obs = self.get_observation()
+        return obs
 
     def update_action(self, action: torch.Tensor) -> torch.Tensor:
         """Calculate the raw action variables and load action into the GPU buffer.

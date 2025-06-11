@@ -37,3 +37,9 @@ DEFAULT_STATE_OBS = [
     "robot_state/gripper_width",
     "parts_poses",
 ]
+
+DEFAULT_REPLAY_KEYS = [
+    "joint_positions",
+    "gripper_finger_1_pos",
+    "gripper_finger_2_pos",
+]
