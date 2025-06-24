@@ -707,7 +707,6 @@ class FurnitureSimRLEnv(gym.Env):
                     if self.parallel_in_single_scene:
                         value.set_name(tmp_name)
                         value.initial_pose.set_p(tmp_initial_p)
-
             self.frank_builder.set_scene(scene)
             if self.parallel_in_single_scene:
                 tmp_initial_p = self.frank_builder.initial_pose.p.copy()
@@ -813,6 +812,103 @@ class FurnitureSimRLEnv(gym.Env):
                 # NOTE(Yuke): for rendering in a single scenario
                 if self.parallel_in_single_scene:
                     break
+    # Not sure whether I can change it during the runtime
+    def rand_light(self, color_rand:Union[np.ndarray, float], direct_rand:Optional[Union[np.ndarray, float]] = None):
+        for light in sim_config["lights"]:
+            for scene in self.scenes:
+                ambient_light = np.array(light["ambient"], dtype=np.float32)
+                ambient_light += color_rand * np.random.rand(3).astype(np.float32)
+                ambient_light = np.clip(ambient_light, 0, 1)
+                scene.render_system.set_ambient_light(ambient_light)
+            for scene in self.scenes:
+                for entity in scene.get_entities():
+                    component = entity.find_component_by_type(sapien.render.RenderDirectionalLightComponent)
+                    if component is not None:
+                        direct_light:sapien.render.RenderDirectionalLightComponent = component
+                        color = np.array(light["color"],dtype=np.float32)
+                        color += color_rand * np.random.rand(3).astype(np.float32)
+                        color = np.clip(color, 0, 1)
+                        direct_light.set_color(color)
+                        light_position = np.zeros(3, dtype=np.float32)
+                        light_direction = np.array(light["direction"], dtype=np.float32)
+                        # NOTE: whether the pose writing operation can happen during the runtime
+                        direct_light.set_entity_pose(camera_pose_from_look_at(light_position, light_direction))
+                        # NOTE(Yuke): Quaternion for this pose make the vector rotate from [1,0,0] to direction following OpenGL convention.
+                        # This is different from the convention in PhysX. It means the direction should be the direction in the OpenGL coordinate.
+
+    def rand_franka_rendering(self, color_rand:Union[float, np.ndarray]):
+        # TODO: randomization of the material property (specular, metalic, etc)
+        for franka_entity in self.franka_entities:
+            for link in franka_entity.links:
+                render_body:sapien.render.RenderBodyComponent = link.entity.find_component_by_type( # type: ignore
+                    sapien.render.RenderBodyComponent
+                )
+                if render_body:
+                    for render_shape in render_body.render_shapes:
+                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                            for part in render_shape.parts:
+                                material:sapien.render.RenderMaterial = part.material
+                                color = material.get_base_color()
+                                color = np.array(color, dtype=np.float32)
+                                color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                                color = np.clip(color, 0, 1)
+                                material.set_base_color(color.tolist())
+                        else:
+                            material = render_shape.material
+                            color = material.get_base_color()
+                            color = np.array(color, dtype=np.float32)
+                            color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                            color = np.clip(color, 0, 1)
+                            material.set_base_color(color.tolist())
+
+    def rand_parts_rendering(self, color_rand:Union[float, np.ndarray]):
+        for key, part_entities in self.part_entities.items():
+            for part_entity in part_entities:
+                render_body:sapien.render.RenderBodyComponent = part_entity.find_component_by_type( # type: ignore
+                    sapien.render.RenderBodyComponent
+                )
+                if render_body:
+                    for render_shape in render_body.render_shapes:
+                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                            for part in render_shape.parts:
+                                material:sapien.render.RenderMaterial = part.material
+                                color = material.get_base_color()
+                                color = np.array(color, dtype=np.float32)
+                                color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                                color = np.clip(color, 0, 1)
+                                material.set_base_color(color.tolist())
+                        else:
+                            material = render_shape.material
+                            color = material.get_base_color()
+                            color = np.array(color, dtype=np.float32)
+                            color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                            color = np.clip(color, 0, 1)
+                            material.set_base_color(color.tolist())
+
+    def rand_obstacle_rendering(self, color_rand: Union[float, np.ndarray]):
+        for key, static_obj_entites in self.static_obj_entites.items():
+            for static_obj in static_obj_entites:
+                render_body:sapien.render.RenderBodyComponent = static_obj.find_component_by_type( # type: ignore
+                    sapien.render.RenderBodyComponent
+                )
+                if render_body:
+                    for render_shape in render_body.render_shapes:
+                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                            for part in render_shape.parts:
+                                material:sapien.render.RenderMaterial = part.material
+                                color = material.get_base_color()
+                                color = np.array(color, dtype=np.float32)
+                                color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                                color = np.clip(color, 0, 1)
+                                material.set_base_color(color.tolist())
+                        else:
+                            material = render_shape.material
+                            color = material.get_base_color()
+                            color = np.array(color, dtype=np.float32)
+                            color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                            color = np.clip(color, 0, 1)
+                            material.set_base_color(color.tolist())
+
 
     def _load_sensors(self):
         self.sensors: Dict[str, List[sapien.render.RenderCameraComponent]] = {}
@@ -1995,6 +2091,8 @@ class FurnitureSimRLEnv(gym.Env):
         self._apply_all()
         self.update_render()
         obs = self.get_observation()
+        if self.record:
+            self.recorder.record_frame(obs)
         return obs
 
     def update_action(self, action: torch.Tensor) -> torch.Tensor:

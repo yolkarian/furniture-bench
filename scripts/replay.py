@@ -10,11 +10,8 @@ import numpy as np
 from furniture_bench.envs.observation import (
      FULL_OBS, DEFAULT_REPLAY_KEYS
 )
-from compressed_tensors import save_compressed, load_compressed, DenseSparsityConfig
+import sapien
 import argparse
-import safetensors.torch
-
-# TODO: Save the result of rendering & Multi Epoch rendering
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
@@ -36,7 +33,7 @@ if __name__=="__main__":
     else:
         record_path = args.record_path
     if args.output is None:
-        output = record_path.rsplit(".", maxsplit=1)[0] + "_color_images.npz"
+        output = record_path.rsplit(".", maxsplit=1)[0] + "_color_images.safetensors"
     else:
         output = args.output
 
@@ -67,10 +64,11 @@ if __name__=="__main__":
                             obs_keys=FULL_OBS,
                             init_assembled=False,
                             enable_sensor=True,
-                            camera_shader="default",
-                            viewer_shader="default",
+                            camera_shader="rt",
+                            viewer_shader="rt",
                             action_type="delta",
-                            april_tags=True,)
+                            april_tags=True,
+                            record=True)
     obs = env.reset()
 
     # NOTE: Currently please onlytime use lamp/one_leg for the simulation, since to use other furnitures
@@ -82,11 +80,22 @@ if __name__=="__main__":
         color_image2 =np.zeros((num_epoch, max_steps, num_envs, *obs["color_image2"].shape[-3:]), dtype=np.uint8)
 
     for i in range(max_steps):
+        if i >= 0:
+            env.rand_parts_rendering(0.6)
+            env.rand_light(0.6)
+            env.rand_franka_rendering(0.2)
+            env.rand_obstacle_rendering(0.3)
         obs = env.render_only_step(torch.from_numpy(qpos[epoch_idx,i]).to("cuda"), parts_poses[epoch_idx , i])
         if args.save_output:
-            color_image1[epoch_idx, i] = obs["color_image1"].cpu().numpy()
-            color_image2[epoch_idx, i] = obs["color_image2"].cpu().numpy()
+            color_image1[epoch_idx, i] = obs["color_image1"].cpu()
+            color_image2[epoch_idx, i] = obs["color_image2"].cpu()
 
     if args.save_output:
-        np.savez_compressed(output, color_image1=color_image1, color_image2=color_image2)
+        safetensors.numpy.save_file({
+            "color_image1":color_image1,
+            "color_image2":color_image2,
+        }, output)
+
+
+    del env
 
