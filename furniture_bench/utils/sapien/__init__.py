@@ -160,3 +160,18 @@ def set_glass_material(material:sapien.render.RenderMaterial):
     material.set_specular(0.9)
     material.set_metallic(0.0)
     material.set_transmission(0.95)
+
+def rand_material(material:sapien.render.RenderMaterial, material_rand:Union[float, np.float32]):
+    m = [
+        material.get_roughness(),
+        material.get_specular(),
+        material.get_metallic(),
+        material.get_transmission(),
+    ]
+    m = np.array(m, dtype=np.float32)
+    m += material_rand * np.random.rand(4).astype(np.float32)
+    m = np.clip(m, 0, 1)
+    material.set_roughness(m[0])
+    material.set_specular(m[1])
+    material.set_metallic(m[2])
+    material.set_transmission(m[3])

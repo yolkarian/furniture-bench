@@ -12,7 +12,8 @@ from furniture_bench.utils.sapien import (
     set_glass_material,
     set_metalic_material,
     set_plastic_material,
-    set_rough_material
+    set_rough_material,
+    rand_material
 )
 import math
 from furniture_bench.utils.sapien.camera import (
@@ -109,6 +110,7 @@ class FurnitureSimRLEnv(gym.Env):
         concat_robot_state: bool = False,
         channel_first:bool = False, # TODO: to implement, by default it is not channel_first
         high_random_idx: int = 0,
+        resize_img:bool = True,
         **kwargs: dict,  # dict which is used to catch extra params
     ):
         self.furniture_name = furniture
@@ -360,7 +362,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.obstacle_left_pose.q = self.obstacle_front_pose.q
 
         # Define parameters of the camera
-        self.resize_img = True
+        self.resize_img = resize_img
         self.img_size = sim_config["camera"][
             "resized_img_size" if self.resize_img else "color_img_size"
         ]
@@ -830,13 +832,15 @@ class FurnitureSimRLEnv(gym.Env):
                         color = np.clip(color, 0, 1)
                         direct_light.set_color(color)
                         light_position = np.zeros(3, dtype=np.float32)
-                        light_direction = np.array(light["direction"], dtype=np.float32)
+                        light_direction = ( np.array(light["direction"], dtype=np.float32) +
+                                            direct_rand * np.random.rand(3).astype(np.float32)) if direct_rand is not None else (
+                                            np.array(light["direction"],dtype=np.float32) )
                         # NOTE: whether the pose writing operation can happen during the runtime
                         direct_light.set_entity_pose(camera_pose_from_look_at(light_position, light_direction))
                         # NOTE(Yuke): Quaternion for this pose make the vector rotate from [1,0,0] to direction following OpenGL convention.
                         # This is different from the convention in PhysX. It means the direction should be the direction in the OpenGL coordinate.
 
-    def rand_franka_rendering(self, color_rand:Union[float, np.ndarray]):
+    def rand_franka_rendering(self, color_rand:Union[float, np.ndarray], material_rand:Optional[Union[float, np.ndarray]] = None):
         # TODO: randomization of the material property (specular, metalic, etc)
         for franka_entity in self.franka_entities:
             for link in franka_entity.links:
@@ -853,6 +857,8 @@ class FurnitureSimRLEnv(gym.Env):
                                 color[:3] += color_rand * np.random.rand(3).astype(np.float32)
                                 color = np.clip(color, 0, 1)
                                 material.set_base_color(color.tolist())
+                                if material_rand is not None:
+                                    rand_material(material, material_rand)
                         else:
                             material = render_shape.material
                             color = material.get_base_color()
@@ -860,8 +866,10 @@ class FurnitureSimRLEnv(gym.Env):
                             color[:3] += color_rand * np.random.rand(3).astype(np.float32)
                             color = np.clip(color, 0, 1)
                             material.set_base_color(color.tolist())
+                            if material_rand is not None:
+                                rand_material(material, material_rand)
 
-    def rand_parts_rendering(self, color_rand:Union[float, np.ndarray]):
+    def rand_parts_rendering(self, color_rand:Union[float, np.ndarray], material_rand:Optional[Union[float, np.ndarray]] = None):
         for key, part_entities in self.part_entities.items():
             for part_entity in part_entities:
                 render_body:sapien.render.RenderBodyComponent = part_entity.find_component_by_type( # type: ignore
@@ -877,6 +885,9 @@ class FurnitureSimRLEnv(gym.Env):
                                 color[:3] += color_rand * np.random.rand(3).astype(np.float32)
                                 color = np.clip(color, 0, 1)
                                 material.set_base_color(color.tolist())
+                                if material_rand is not None:
+                                    rand_material(material, material_rand)
+
                         else:
                             material = render_shape.material
                             color = material.get_base_color()
@@ -884,8 +895,10 @@ class FurnitureSimRLEnv(gym.Env):
                             color[:3] += color_rand * np.random.rand(3).astype(np.float32)
                             color = np.clip(color, 0, 1)
                             material.set_base_color(color.tolist())
+                            if material_rand is not None:
+                                rand_material(material, material_rand)
 
-    def rand_obstacle_rendering(self, color_rand: Union[float, np.ndarray]):
+    def rand_obstacle_rendering(self, color_rand: Union[float, np.ndarray], material_rand:Optional[Union[float, np.ndarray]] = None):
         for key, static_obj_entites in self.static_obj_entites.items():
             for static_obj in static_obj_entites:
                 render_body:sapien.render.RenderBodyComponent = static_obj.find_component_by_type( # type: ignore
@@ -901,6 +914,8 @@ class FurnitureSimRLEnv(gym.Env):
                                 color[:3] += color_rand * np.random.rand(3).astype(np.float32)
                                 color = np.clip(color, 0, 1)
                                 material.set_base_color(color.tolist())
+                                if material_rand is not None:
+                                    rand_material(material, material_rand)
                         else:
                             material = render_shape.material
                             color = material.get_base_color()
@@ -908,6 +923,8 @@ class FurnitureSimRLEnv(gym.Env):
                             color[:3] += color_rand * np.random.rand(3).astype(np.float32)
                             color = np.clip(color, 0, 1)
                             material.set_base_color(color.tolist())
+                            if material_rand is not None:
+                                rand_material(material, material_rand)
 
 
     def _load_sensors(self):
