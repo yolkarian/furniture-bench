@@ -31,6 +31,6 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(),
     include_package_data=True,
-    python_requires=">3.8,<3.10",
+    python_requires=">3.8,<3.11",
     install_requires=core_requirements,
 )
