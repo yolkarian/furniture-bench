@@ -1623,7 +1623,7 @@ class FurnitureSimRLEnv(gym.Env):
         ).T.to(self.device)
 
     def reset(self, env_idxs: Optional[torch.Tensor] = None):
-        print("In orignal reset")
+        # print("In orignal reset")
         if env_idxs is None:
             env_idxs = torch.arange(
                 self.num_envs, device=self.device, dtype=torch.int32
@@ -1712,6 +1712,9 @@ class FurnitureSimRLEnv(gym.Env):
         if reset_franka:
             self._reset_franka(env_idx)
 
+        self._apply_all()
+        self.physx_system.gpu_update_articulation_kinematics()
+        self._fetch_all()
         self.env_steps[env_idx] = 0
         self.already_assembled[env_idx] = 0
         self.move_neutral = False
