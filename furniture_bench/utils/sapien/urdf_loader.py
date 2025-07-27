@@ -49,7 +49,7 @@ class URDFLoader:
         self.fix_root_link = True
         self.load_multiple_collisions_from_file = False
         self.load_nonconvex_collisions_from_file = False
-        self.multiple_collisions_decomposition:Literal["none", "cocad"] = "none"
+        self.multiple_collisions_decomposition:Literal["none", "coacd"] = "none"
         self.multiple_collisions_decomposition_params = dict()
 
         self.collision_is_visual = False

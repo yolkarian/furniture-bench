@@ -544,7 +544,8 @@ class FurnitureSimRLEnv(gym.Env):
     def _create_part_builders(self):
         self.part_builders: Dict[str, ActorBuilder] = {}
         self.part_default_pose: Dict[str, np.ndarray] = {}
-        self.urdf_loader.load_nonconvex_collisions_from_file = True # Some meshes of parts are nonconvex
+        self.urdf_loader.load_multiple_collisions_from_file = True # Some meshes of parts are nonconvex
+        self.urdf_loader.multiple_collisions_decomposition = "coacd"
         for part in self.furniture.parts:
             part_builder = generate_builder_with_options_(
                 self.urdf_loader,
@@ -577,7 +578,7 @@ class FurnitureSimRLEnv(gym.Env):
                     sim_config["parts"]["friction"],
                     self.restitution,
                 )
-        self.urdf_loader.load_nonconvex_collisions_from_file = False
+        self.urdf_loader.load_multiple_collisions_from_file = False
 
     def _create_scenes(self):
         # %% Create Scenes

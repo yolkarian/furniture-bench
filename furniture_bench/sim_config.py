@@ -39,7 +39,7 @@ class PhysxParams:
     max_depenetration_velocity: float = 10
     num_threads: int = 0
     use_gpu:bool = False
-    max_gpu_contact_pairs:int = 6553600
+    max_gpu_contact_pairs:int = 16055314
     default_buffer_size_multiplier:int = 8.0
 
     # TODO: introduce params for contact control       
