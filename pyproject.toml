@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "furniture_bench"
+version = "0.1"
+description = "FurnitureBench: Reproducible Real-World Furniture Assembly Benchmark (RSS 2023)"
+readme = "README.md"
+requires-python = ">=3.8,<3.11"
+authors = [
+    {name = "CLVR @ KAIST", email = "clvr.kaist@gmail.com"}
+]
+urls = {Homepage = "https://github.com/clvrai/furniture-bench"}
+dependencies = [
+    "opencv-python",
+    "pytorch_kinematics>=0.7.5",
+    "gymnasium==0.29.1",
+    "ipdb",
+    "imageio",
+    "pynput==1.7.7",
+    "joblib",
+    "numba",
+    "pyrealsense2",
+    "dt-apriltags",
+    "rich",
+    "tqdm",
+    "coacd",
+    "trimesh",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]

@@ -4,6 +4,7 @@ from enum import Enum
 
 
 class Randomness(Enum):
+    NONE = -1  # No randomization of part poses or robot joints.
     LOW = 0
     MEDIUM = 1
     HIGH = 2
@@ -20,7 +21,9 @@ class Randomness(Enum):
 def str_to_enum(v):
     if isinstance(v, Randomness):
         return v
-    if v == "low":
+    if v == "none":
+        return Randomness.NONE
+    elif v == "low":
         return Randomness.LOW
     elif v == "med":
         return Randomness.MEDIUM

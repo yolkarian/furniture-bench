@@ -1,5 +1,5 @@
 """Define additional parameters based on real-world config for simulator."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
@@ -45,15 +45,45 @@ class PhysxParams:
     # TODO: introduce params for contact control       
     # sapien.physx.set_gpu_memory_config(max_rigid_contact_count=6553600)
 
-    
+
+@dataclass
+class GPUMemoryConfig:
+    # More generous defaults for contact-heavy furniture assembly. An RTX 5090
+    # has enough headroom for larger PhysX GPU buffers, and we have already seen
+    # PhysX request collisionStackSize >= 10_097_008, so use the next power of 2.
+    temp_buffer_capacity: int = 2**25
+    max_rigid_contact_count: int = 2**22
+    max_rigid_patch_count: int = 2**21
+    heap_capacity: int = 2**27
+    found_lost_pairs_capacity: int = 2**26
+    found_lost_aggregate_pairs_capacity: int = 2**10
+    total_aggregate_pairs_capacity: int = 2**10
+    collision_stack_size: int = 2**24
+
+    def dict(self):
+        return {
+            "temp_buffer_capacity": self.temp_buffer_capacity,
+            "max_rigid_contact_count": self.max_rigid_contact_count,
+            "max_rigid_patch_count": self.max_rigid_patch_count,
+            "heap_capacity": self.heap_capacity,
+            "found_lost_pairs_capacity": self.found_lost_pairs_capacity,
+            "found_lost_aggregate_pairs_capacity": self.found_lost_aggregate_pairs_capacity,
+            "total_aggregate_pairs_capacity": self.total_aggregate_pairs_capacity,
+            "collision_stack_size": self.collision_stack_size,
+        }
+
+
 @dataclass
 class SimParams:
     # up_axis
-    gravity: np.ndarray = np.array([0.0, 0.0, -9.8], dtype=np.float32)
+    gravity: np.ndarray = field(
+        default_factory=lambda: np.array([0.0, 0.0, -9.8], dtype=np.float32)
+    )
     dt: float = 1.0 / 60.0
     substeps: int = 2
     use_gpu_pipeline: bool = True
-    physx: PhysxParams = PhysxParams()
+    physx: PhysxParams = field(default_factory=PhysxParams)
+    gpu_memory: GPUMemoryConfig = field(default_factory=GPUMemoryConfig)
 
 @dataclass
 class AssetOptions:

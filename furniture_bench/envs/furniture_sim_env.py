@@ -160,7 +160,12 @@ class FurnitureSimRLEnv(gym.Env):
         # osc is not supported
         assert self.ctrl_mode == "diffik"
 
-        if self.randomness == Randomness.LOW:
+        if self.randomness == Randomness.NONE:
+            self.max_force_magnitude = 0.0
+            self.max_torque_magnitude = 0.0
+            self.max_obstacle_offset = 0.0
+            self.franka_joint_rand_lim_deg = 0.0
+        elif self.randomness == Randomness.LOW:
             self.max_force_magnitude = 0.2
             self.max_torque_magnitude = 0.007
             self.max_obstacle_offset = 0.02
@@ -219,6 +224,11 @@ class FurnitureSimRLEnv(gym.Env):
         )
         self.torque_multiplier = torch.tensor(torque_mul, device=self.device).unsqueeze(
             -1
+        )
+        self.robot_pos_limits = torch.tensor(
+            config["robot"]["position_limits"],
+            dtype=torch.float32,
+            device=self.device,
         )
 
         # Pair for the reward computation
@@ -293,8 +303,8 @@ class FurnitureSimRLEnv(gym.Env):
             # Adjust simulation parameters
             sim_config["sim_params"].dt = 1.0 / 120.0
             sim_config["sim_params"].substeps = 4
-            sim_config["sim_params"].physx.max_gpu_contact_pairs = 6553600
-            sim_config["sim_params"].physx.default_buffer_size_multiplier = 8.0
+            sim_config["sim_params"].gpu_memory.max_rigid_contact_count = 6553600
+            sim_config["sim_params"].gpu_memory.max_rigid_patch_count = 2**22
 
             # Adjust part friction
             sim_config["parts"]["friction"] = 0.25
@@ -396,10 +406,17 @@ class FurnitureSimRLEnv(gym.Env):
         # %% General Setup of Simulator
         sim_params: SimParams = sim_config["sim_params"]
         sapien.physx.enable_gpu()
+        gpu_memory_config = sim_params.gpu_memory.dict()
+        try:
+            sapien.physx.set_gpu_memory_config(**gpu_memory_config)
+        except TypeError:
+            gpu_memory_config.pop("collision_stack_size", None)
+            sapien.physx.set_gpu_memory_config(**gpu_memory_config)
         sapien.physx.set_scene_config(
             gravity=sim_params.gravity,
             bounce_threshold=sim_params.physx.bounce_threshold_velocity,
             enable_tgs=True if sim_params.physx.solver_type == 1 else False,
+            enable_ccd=False,
             friction_correlation_distance=sim_params.physx.friction_correlation_distance,
             friction_offset_threshold=sim_params.physx.friction_offset_threshold,
             cpu_workers=sim_params.physx.num_threads,
@@ -544,8 +561,8 @@ class FurnitureSimRLEnv(gym.Env):
     def _create_part_builders(self):
         self.part_builders: Dict[str, ActorBuilder] = {}
         self.part_default_pose: Dict[str, np.ndarray] = {}
-        self.urdf_loader.load_multiple_collisions_from_file = True # Some meshes of parts are nonconvex
-        self.urdf_loader.multiple_collisions_decomposition = "coacd"
+        self.urdf_loader.load_nonconvex_collisions_from_file = True # Some meshes of parts are nonconvex
+    
         for part in self.furniture.parts:
             part_builder = generate_builder_with_options_(
                 self.urdf_loader,
@@ -578,7 +595,7 @@ class FurnitureSimRLEnv(gym.Env):
                     sim_config["parts"]["friction"],
                     self.restitution,
                 )
-        self.urdf_loader.load_multiple_collisions_from_file = False
+        self.urdf_loader.load_nonconvex_collisions_from_file = False
 
     def _create_scenes(self):
         # %% Create Scenes
@@ -729,13 +746,18 @@ class FurnitureSimRLEnv(gym.Env):
             else:
                 franka_entity.set_name("franka")
 
+            for link in franka_entity.links:
+                link.entity.find_component_by_type(
+                    sapien.physx.PhysxRigidBodyComponent
+                ).set_max_depenetration_velocity(
+                    sim_config["sim_params"].physx.max_depenetration_velocity
+                )
+
             if i == 0:
+                self.franka_qlimits = torch.from_numpy(
+                    franka_entity.get_qlimits()
+                ).to(dtype=torch.float32, device=self.device)
                 for link in franka_entity.links:
-                    link.entity.find_component_by_type(
-                        sapien.physx.PhysxRigidBodyComponent
-                    ).set_max_depenetration_velocity(
-                        sim_config["sim_params"].physx.max_depenetration_velocity
-                    )
                     render_body:sapien.render.RenderBodyComponent = link.entity.find_component_by_type( # type: ignore
                         sapien.render.RenderBodyComponent
                     )
@@ -1284,12 +1306,18 @@ class FurnitureSimRLEnv(gym.Env):
         qpos = self.get_qpos()
         joint_positions = qpos[:, :7]
         joint_velocities = self.get_qvel()[:, :7]
-        # NOTE(Yuke): This is applied joint torch
+        # NOTE(Yuke): This is applied joint torque (PD controller output)
+        # Use franka_gpu_index for correct buffer indexing — the GPU articulation
+        # buffers are indexed by GPU articulation index, not by env index.
         joint_torques = self.stiffness * (
-            self.physx_system.cuda_articulation_target_qpos.torch()[:, :7]
+            self.physx_system.cuda_articulation_target_qpos.torch()[
+                self.franka_gpu_index, :7
+            ]
             - joint_positions
         ) + self.damping * (
-            self.physx_system.cuda_articulation_target_qvel.torch()[:, :7]
+            self.physx_system.cuda_articulation_target_qvel.torch()[
+                self.franka_gpu_index, :7
+            ]
             - joint_velocities
         )
 
@@ -1625,15 +1653,30 @@ class FurnitureSimRLEnv(gym.Env):
 
     def reset(self, env_idxs: Optional[torch.Tensor] = None):
         # print("In orignal reset")
+        resetting_all = env_idxs is None
         if env_idxs is None:
             env_idxs = torch.arange(
                 self.num_envs, device=self.device, dtype=torch.int32
             )
+        resetting_all = resetting_all or (len(env_idxs) == self.num_envs)
         for i in env_idxs:
-            self.reset_env(i)
-        self.step_ctrl.reset()
-        self.physx_system.step()
+            env_idx = int(i.item()) if isinstance(i, torch.Tensor) else int(i)
+            self.reset_env(env_idx)
+        # Only reset the controller on a full reset (all envs restarting).
+        # A partial reset must not clobber the controller state for envs that
+        # are still mid-episode.
+        if resetting_all:
+            self.step_ctrl.reset()
+        self._apply_all()
+        self.physx_system.gpu_update_articulation_kinematics()
         self._fetch_all()
+        # Only step physics when resetting all envs (full reset / episode start).
+        # A partial reset (some envs done, others still running) must NOT advance
+        # the physics for the non-reset envs — doing so gives those envs an extra
+        # uncounted step and causes correlated disturbances / sudden success spikes.
+        if resetting_all:
+            self.physx_system.step()
+            self._fetch_all()
         self.update_render()
         self.assemble_idx = 0
         obs = self.get_observation()
@@ -1650,6 +1693,36 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.step()
         self._fetch_all()
         self.update_render()
+
+    def _get_env_rigid_body_wrench_indices(self, env_idx: int) -> torch.Tensor:
+        env_indices = [
+            self.parts_gpu_index_tensor[env_idx].reshape(-1).to(
+                device=self.device, dtype=torch.long
+            )
+        ]
+        for obstacle_indices in self.obstacle_gpu_index.values():
+            env_indices.append(
+                obstacle_indices[env_idx].reshape(1).to(
+                    device=self.device, dtype=torch.long
+                )
+            )
+
+        return torch.cat(env_indices, dim=0)
+
+    def _clear_rigid_body_wrenches(self, env_idx: Optional[int] = None):
+        if env_idx is None:
+            self.physx_system.cuda_rigid_body_force.torch()[:, :] = 0
+            self.physx_system.cuda_rigid_body_torque.torch()[:, :] = 0
+        else:
+            env_indices = self._get_env_rigid_body_wrench_indices(env_idx)
+            self.physx_system.cuda_rigid_body_force.torch()[env_indices, :] = 0
+            self.physx_system.cuda_rigid_body_torque.torch()[env_indices, :] = 0
+
+        # NOTE: Do NOT call gpu_apply_rigid_dynamic_force/torque() here.
+        # Callers are responsible for applying via _apply_all() or an explicit gpu_apply call.
+        # Calling gpu_apply inside this helper causes extra apply calls outside _apply_all(),
+        # which can double-apply forces when this is called from reset_env() (Bug 6).
+        # The explicit applies in set_parts_env() and step() are the intended apply points.
 
     def reset_env_to(self, env_idx: int, state: dict):
         """Reset to a specific state. **MUST refresh in between multiple calls
@@ -1679,7 +1752,9 @@ class FurnitureSimRLEnv(gym.Env):
             torch.from_numpy(dof_pos).to(dtype=torch.float32, device=self.device),
         )
         self._reset_parts(env_idx, state["parts_poses"])
+        self._clear_rigid_body_wrenches(env_idx)
         self.env_steps[env_idx] = 0
+        self.already_assembled[env_idx] = 0
         self.move_neutral = False
 
     def reset_env(
@@ -1694,17 +1769,13 @@ class FurnitureSimRLEnv(gym.Env):
         """
         furniture: Furniture = self.furnitures[env_idx]
         furniture.reset()
-        if self.randomness == Randomness.LOW and not self.init_assembled:
+        if self.randomness == Randomness.NONE or self.init_assembled:
+            pass  # No pose randomization.
+        elif self.randomness == Randomness.LOW:
             furniture.randomize_init_pose(
                 self.from_skill, pos_range=[-0.015, 0.015], rot_range=15
             )
-
-        if self.randomness == Randomness.LOW and not self.init_assembled:
-            furniture.randomize_init_pose(
-                self.from_skill, pos_range=[-0.015, 0.015], rot_range=15
-            )
-
-        if self.randomness == Randomness.MEDIUM:
+        elif self.randomness == Randomness.MEDIUM:
             furniture.randomize_init_pose(self.from_skill)
         elif self.randomness == Randomness.HIGH:
             furniture.randomize_high(self.high_random_idx)
@@ -1713,12 +1784,17 @@ class FurnitureSimRLEnv(gym.Env):
         if reset_franka:
             self._reset_franka(env_idx)
 
-        self._apply_all()
-        self.physx_system.gpu_update_articulation_kinematics()
-        self._fetch_all()
+        self._clear_rigid_body_wrenches(env_idx)
+
+        # NOTE: Do NOT call _apply_all()/_fetch_all() here. The outer reset() batches a
+        # single _apply_all() + gpu_update_articulation_kinematics() + _fetch_all() after
+        # iterating over all envs. Calling them inside the per-env loop would push the ENTIRE
+        # GPU buffer (including live state of non-reset envs' qf, qpos, qvel) on every
+        # iteration and re-apply running envs' stale forces, causing torque impulse artifacts.
         self.env_steps[env_idx] = 0
         self.already_assembled[env_idx] = 0
         self.move_neutral = False
+        self.last_grasp[env_idx] = -1.0  # Reset gripper hysteresis state for this env.
 
     def _reset_franka(
         self, env_idx: Optional[int] = None, dof_pos: Optional[torch.Tensor] = None
@@ -1764,14 +1840,14 @@ class FurnitureSimRLEnv(gym.Env):
             device=self.device,
         )
         # Apply Changes
-        self.physx_system.gpu_apply_articulation_qpos()
-        self.physx_system.gpu_apply_articulation_qvel()
-        self.physx_system.gpu_update_articulation_kinematics()
-        self.physx_system.gpu_apply_articulation_qf()
-        self.physx_system.gpu_apply_articulation_root_pose()
-        self.physx_system.gpu_apply_articulation_root_velocity()
-        self.physx_system.gpu_apply_articulation_target_position()
-        self.physx_system.gpu_apply_articulation_target_velocity()
+        # self.physx_system.gpu_apply_articulation_qpos()
+        # self.physx_system.gpu_apply_articulation_qvel()
+        # self.physx_system.gpu_update_articulation_kinematics()
+        # self.physx_system.gpu_apply_articulation_qf()
+        # self.physx_system.gpu_apply_articulation_root_pose()
+        # self.physx_system.gpu_apply_articulation_root_velocity()
+        # self.physx_system.gpu_apply_articulation_target_position()
+        # self.physx_system.gpu_apply_articulation_target_velocity()
 
     def set_franka(self, dof_pos:torch.Tensor):
         self._reset_franka(dof_pos = dof_pos)
@@ -1824,8 +1900,6 @@ class FurnitureSimRLEnv(gym.Env):
             )
             # linear vel and rot vel to zero
             self.physx_system.cuda_rigid_body_data.torch()[idxs, 7:] = 0
-            self.physx_system.cuda_rigid_body_force.torch()[:, :] = 0
-            self.physx_system.cuda_rigid_body_torque.torch()[:, :] = 0
 
         # Get the obstacle poses, last 7 numbers in the parts_poses tensor
         if parts_poses is not None:
@@ -1899,7 +1973,7 @@ class FurnitureSimRLEnv(gym.Env):
             return
 
         # Reset root state for actors in a single env
-        self.physx_system.gpu_apply_rigid_dynamic_data()
+        # self.physx_system.gpu_apply_rigid_dynamic_data()
 
     # TODO: Vectorizated reset & Quaternion Setting for Observation
     def set_parts_env(
@@ -1949,8 +2023,6 @@ class FurnitureSimRLEnv(gym.Env):
             )
             # linear vel and rot vel to zero
             self.physx_system.cuda_rigid_body_data.torch()[idxs, 7:] = 0
-            self.physx_system.cuda_rigid_body_force.torch()[:, :] = 0
-            self.physx_system.cuda_rigid_body_torque.torch()[:, :] = 0
 
         # Get the obstacle poses, last 7 numbers in the parts_poses tensor
 
@@ -2018,12 +2090,15 @@ class FurnitureSimRLEnv(gym.Env):
             ] = torch.from_numpy(obstacle_pose.p + obstacle_left_offset).to(
                 dtype=torch.float32, device=self.device
             )
-
-
-
+        # Clear residual external wrench only for the target env.
+        self._clear_rigid_body_wrenches(env_idx)
 
         # Reset root state for actors in a single env
         self.physx_system.gpu_apply_rigid_dynamic_data()
+        # Apply the zeroed wrenches explicitly since _clear_rigid_body_wrenches no longer
+        # calls gpu_apply internally (it was removed to avoid double-apply bugs).
+        self.physx_system.gpu_apply_rigid_dynamic_force()
+        self.physx_system.gpu_apply_rigid_dynamic_torque()
 
     def step_viewer(self):
         if self.viewer is None:
@@ -2045,7 +2120,12 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_fetch_articulation_target_qvel()
 
     def _apply_all(self):
+        """Apply ALL GPU buffers. Use ONLY during reset / state restoration.
+        During normal stepping, use _apply_action_only() instead to avoid
+        overwriting PhysX-computed qpos/qvel/rigid body states."""
         self.physx_system.gpu_apply_rigid_dynamic_data()
+        self.physx_system.gpu_apply_rigid_dynamic_force()
+        self.physx_system.gpu_apply_rigid_dynamic_torque()
         self.physx_system.gpu_apply_articulation_qpos()
         self.physx_system.gpu_apply_articulation_qvel()
         self.physx_system.gpu_apply_articulation_qf()
@@ -2053,6 +2133,15 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_apply_articulation_root_velocity()
         self.physx_system.gpu_apply_articulation_target_position()
         self.physx_system.gpu_apply_articulation_target_velocity()
+
+    def _apply_action_only(self):
+        """Selectively apply only the buffers modified by update_action().
+        This avoids overwriting PhysX-simulated qpos/qvel/rigid body data
+        with stale buffer values, which was the root cause of training
+        instability (see ManiSkill's selective apply pattern)."""
+        self.physx_system.gpu_apply_articulation_target_position()
+        self.physx_system.gpu_apply_articulation_target_velocity()
+        self.physx_system.gpu_apply_articulation_qf()
 
     def get_jacobian_ee(self, qpos: torch.Tensor) -> torch.Tensor:
         # Pinocchio can only use loop to compute jacobian for multiple envs
@@ -2071,10 +2160,33 @@ class FurnitureSimRLEnv(gym.Env):
     def step(
         self, action: torch.Tensor, sample_perturbations: bool = False
     ) -> Tuple[dict, torch.Tensor, torch.Tensor, dict]:
+        # Clear any residual external forces/torques from the previous step (or from
+        # _random_perturbation_of_parts at the end of the last step). Without this, perturbation
+        # forces applied at the end of step T are re-applied at step T+1 by the gpu_apply calls,
+        # effectively doubling the force magnitude.
+        if sample_perturbations:
+            force_buf = self.physx_system.cuda_rigid_body_force.torch()
+            torque_buf = self.physx_system.cuda_rigid_body_torque.torch()
+            all_part_indices = self.parts_gpu_index_tensor.view(-1)
+            force_buf[all_part_indices, :3] = 0
+            torque_buf[all_part_indices, :3] = 0
+            # Apply zeroed forces so PhysX sees them before stepping.
+            self.physx_system.gpu_apply_rigid_dynamic_force()
+            self.physx_system.gpu_apply_rigid_dynamic_torque()
         self.update_action(action)
-        self._apply_all()
-        for _ in range(self.sim_steps):
+        # Only apply the buffers that update_action() actually modified:
+        # target_qpos, target_qvel, and qf (gripper torque).
+        # Do NOT call _apply_all() here — that would overwrite PhysX-computed
+        # qpos/qvel/rigid body data with stale buffer values, causing the robot
+        # and parts to teleport back to their previous-step state every step.
+        self._apply_action_only()
+        for i in range(self.sim_steps):
             self.physx_system.step()
+            # Re-apply qf each substep because PhysX consumes joint forces
+            # on each simulate() call. Without this, the gripper only receives
+            # torque during the first substep.
+            if i < self.sim_steps - 1:
+                self.physx_system.gpu_apply_articulation_qf()
         self._fetch_all()
         self.update_render()
         obs = self.get_observation()
@@ -2088,11 +2200,19 @@ class FurnitureSimRLEnv(gym.Env):
                 self.max_force_magnitude,
                 self.max_torque_magnitude,
             )
+        # episode_success: True when all pairs are assembled (not a timeout).
+        episode_success = (
+            self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble)
+        )
         return (
             obs,
             reward,
             done,
-            {"obs_success": True, "action_success": True},
+            {
+                "obs_success": True,
+                "action_success": True,
+                "episode_success": episode_success,
+            },
         )
 
     def render_only_step(self, franka_dof_pos: torch.Tensor, parts_poses:np.ndarray)->Dict[str, torch.Tensor]:
@@ -2129,6 +2249,14 @@ class FurnitureSimRLEnv(gym.Env):
         if self.__act_rot_repr == 0:
             # Real part is the last element in the quaternion.
             action_quat_xyzw = action[:, 3:7]
+            quat_norm = torch.linalg.norm(action_quat_xyzw, dim=-1, keepdim=True)
+            identity_quat = torch.zeros_like(action_quat_xyzw)
+            identity_quat[:, -1] = 1.0
+            action_quat_xyzw = torch.where(
+                quat_norm > 1e-6,
+                action_quat_xyzw / quat_norm,
+                identity_quat,
+            )
 
         elif self.__act_rot_repr == 1:
             rot_6d = action[:, 3:9]
@@ -2156,6 +2284,22 @@ class FurnitureSimRLEnv(gym.Env):
             )
             goal_pose[:, :3] = action[:, :3]
             goal_pose[:, 3:7] = action_quat_xyzw.roll(1, dims=-1)
+
+        goal_pose[:, 0] = torch.clamp(
+            goal_pose[:, 0],
+            self.robot_pos_limits[0, 0],
+            self.robot_pos_limits[0, 1],
+        )
+        goal_pose[:, 1] = torch.clamp(
+            goal_pose[:, 1],
+            self.robot_pos_limits[1, 0],
+            self.robot_pos_limits[1, 1],
+        )
+        goal_pose[:, 2] = torch.clamp(
+            goal_pose[:, 2],
+            self.robot_pos_limits[2, 0],
+            self.robot_pos_limits[2, 1],
+        )
 
         # SAPIEN uses wxyz, diffik uses xyzw
         self.step_ctrl.set_goal(goal_pose[:, :3], goal_pose[:, 3:7].roll(-1, dims=-1))
@@ -2209,7 +2353,19 @@ class FurnitureSimRLEnv(gym.Env):
             sim_config["robot"]["gripper_torque"],
             -sim_config["robot"]["gripper_torque"],
         )
-        target_qpos[:, :7] = self.step_ctrl(state_dict)["joint_positions"]
+        arm_target_qpos = self.step_ctrl(state_dict)["joint_positions"]
+        valid_arm_target = torch.isfinite(arm_target_qpos).all(dim=1)
+        arm_target_qpos = torch.clamp(
+            arm_target_qpos,
+            self.franka_qlimits[:7, 0],
+            self.franka_qlimits[:7, 1],
+        )
+        arm_target_qpos = torch.where(
+            valid_arm_target.unsqueeze(1),
+            arm_target_qpos,
+            qpos[:, :7],
+        )
+        target_qpos[:, :7] = arm_target_qpos
         target_qpos[:, 7:9] = torch.where(
             gripper_action_mask,
             self.max_gripper_width / 2,
@@ -2217,10 +2373,23 @@ class FurnitureSimRLEnv(gym.Env):
         )  # No use since it is qf control
         # print(target_qpos.cpu().numpy())
 
-        # Write changes to buffer
-        self.physx_system.cuda_articulation_qf.torch()[:, :] = target_qf
-        self.physx_system.cuda_articulation_target_qpos.torch()[:, :] = target_qpos
-        self.physx_system.cuda_articulation_target_qvel.torch()[:, :] = torch.zeros(
+        # Write changes to buffer.
+        # NOTE: Use franka_gpu_index (the GPU articulation row indices for each Franka) instead
+        # of [:, :] full-buffer writes. The cuda_articulation_* buffers are flat across ALL
+        # articulations in ALL scenes; using [:, :] writes env-0's values to articulation row 0,
+        # env-1's values to row 1, etc. — which is ONLY correct if franka_gpu_index == [0,1,...,N-1].
+        # In practice, franka_gpu_index can be any permutation (e.g. [3,7,11,...]) depending on
+        # the scene construction order, so the full-buffer write sends each env's action to the
+        # wrong robot.
+        self.physx_system.cuda_articulation_qf.torch()[
+            self.franka_gpu_index, : self.franka_num_dof
+        ] = target_qf
+        self.physx_system.cuda_articulation_target_qpos.torch()[
+            self.franka_gpu_index, : self.franka_num_dof
+        ] = target_qpos
+        self.physx_system.cuda_articulation_target_qvel.torch()[
+            self.franka_gpu_index, : self.franka_num_dof
+        ] = torch.zeros(
             (self.num_envs, self.franka_num_dof),
             dtype=torch.float32,
             device=self.device,
@@ -2314,7 +2483,8 @@ class FurnitureSimRLEnv(gym.Env):
         # )
 
         if self.manual_done and (rewards == 1).any():
-            return print("Part assembled!")
+            print("Part assembled!")
+            return rewards
 
         return rewards
 
@@ -2323,9 +2493,11 @@ class FurnitureSimRLEnv(gym.Env):
     def _done(self):
         if self.manual_done:
             return torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
-        return (
+        assembled = (
             self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble)
-        ).unsqueeze(1)
+        )
+        timeout = self.env_steps > self.furniture.max_env_steps
+        return (assembled | timeout).unsqueeze(1)
 
     def _random_perturbation_of_parts(
         self,
@@ -2376,32 +2548,28 @@ class FurnitureSimRLEnv(gym.Env):
             dim=-1,
         )
 
-        # Fill the appropriate indices with the generated forces and torques based on the selected part mask
-        # Create tensors to hold forces and torques for all rigid bodies
-        rigid_body_count = self.physx_system.cuda_rigid_body_data.torch().shape[0]
+        # Write forces/torques directly into only the part rows of the GPU buffers.
+        # Non-part bodies are not touched. Part rows are already zeroed at the start
+        # of step() (Bug 5 fix), so unselected parts stay at zero automatically.
+        all_part_indices = self.parts_gpu_index_tensor.view(-1)
+        selected_indices = all_part_indices[selected_part_mask]
 
-        all_forces = torch.zeros((rigid_body_count, 3), device=self.device)
-        all_torques = torch.zeros((rigid_body_count, 3), device=self.device)
+        force_buf = self.physx_system.cuda_rigid_body_force.torch()
+        torque_buf = self.physx_system.cuda_rigid_body_torque.torch()
 
-        # Fill the appropriate indices with the generated forces and torques based on the selected part mask
-        all_forces[self.parts_gpu_index_tensor.view(-1)[selected_part_mask]] = forces[
-            selected_part_mask
-        ]
-        all_torques[self.parts_gpu_index_tensor.view(-1)[selected_part_mask]] = torques[
-            selected_part_mask
-        ]
+        force_buf[selected_indices, :3] = forces[selected_part_mask]
+        torque_buf[selected_indices, :3] = torques[selected_part_mask]
 
-        # Apply the forces and torques to the rigid bodies
-        self.physx_system.cuda_rigid_body_force.torch()[:, :3] = all_forces
-        self.physx_system.cuda_rigid_body_torque.torch()[:, :3] = all_torques
-
+        # Explicit apply needed here because this function runs after physx_system.step();
+        # _apply_all() in the next step() call is too late for these forces.
         self.physx_system.gpu_apply_rigid_dynamic_force()
         self.physx_system.gpu_apply_rigid_dynamic_torque()
 
     def gripper_width(self) -> torch.Tensor:
+        qpos = self.physx_system.cuda_articulation_qpos.torch()
         return (
-            self.physx_system.cuda_articulation_qpos.torch()[:, 7:8]
-            - self.physx_system.cuda_articulation_qpos.torch()[:, 8:9]
+            qpos[self.franka_gpu_index, 7:8]
+            + qpos[self.franka_gpu_index, 8:9]
         )
 
     def sim_pose_to_april_pose(self, parts_poses: torch.Tensor) -> torch.Tensor:
@@ -2609,10 +2777,20 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
     def step(
         self, action: torch.Tensor, sample_perturbations: bool = False
     ) -> Tuple[dict, torch.Tensor, torch.Tensor, dict]:
+        if sample_perturbations:
+            force_buf = self.physx_system.cuda_rigid_body_force.torch()
+            torque_buf = self.physx_system.cuda_rigid_body_torque.torch()
+            all_part_indices = self.parts_gpu_index_tensor.view(-1)
+            force_buf[all_part_indices, :3] = 0
+            torque_buf[all_part_indices, :3] = 0
+            self.physx_system.gpu_apply_rigid_dynamic_force()
+            self.physx_system.gpu_apply_rigid_dynamic_torque()
         self.update_action(action)
-        self._apply_all()
-        for _ in range(self.sim_steps):
+        self._apply_action_only()
+        for i in range(self.sim_steps):
             self.physx_system.step()
+            if i < self.sim_steps - 1:
+                self.physx_system.gpu_apply_articulation_qf()
         self._fetch_all()
         self.update_render()
         obs = self.get_observation()
