@@ -1,36 +1,46 @@
-"""Define data collection class that rollout the environment, get action from the interface (e.g., teleoperation, automatic scripts), and save data."""
+"""Collect simulator or real-world demonstrations with a SpaceMouse."""
 
-import time
-import pickle
-from datetime import datetime
-from pathlib import Path
-
-import cv2
-import gymnasium as gym
-import torch
-from joblib import Parallel, delayed
-from tqdm import tqdm
-from ipdb import set_trace as st
-
-from furniture_bench.device.device_interface import DeviceInterface
-from furniture_bench.data.collect_enum import CollectEnum
-from furniture_bench.config import config
-from furniture_bench.perception.image_utils import resize, resize_crop
-from furniture_bench.envs.initialization_mode import Randomness
-from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
+from __future__ import annotations
 
 import os
+import pickle
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from multiprocessing.managers import SharedMemoryManager
+from pathlib import Path
+from typing import Any, Iterator, Literal
 
+import cv2
+import gymnasium as gym
 import numpy as np
 import scipy.spatial.transform as st
+import torch
+from joblib import Parallel, delayed
+from tqdm import tqdm
+
+from furniture_bench.config import config
+from furniture_bench.data.collect_enum import CollectEnum
+from furniture_bench.device.device_interface import DeviceInterface
 from furniture_bench.device.spacemouse.spacemouse_shared_memory import Spacemouse
+from furniture_bench.envs.initialization_mode import Randomness
+from furniture_bench.perception.image_utils import resize, resize_crop
+from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 
 
-def precise_wait(t_end: float, slack_time: float = 0.001, time_func=time.monotonic):
+ObservationMode = Literal["state", "full", "image"]
+
+SIM_OBSERVATION_TO_ENV_ID: dict[ObservationMode, str] = {
+    "state": "FurnitureSimState-v0",
+    "full": "FurnitureSimFull-v0",
+    "image": "FurnitureSimFull-v0",
+}
+
+
+def precise_wait(
+    t_end: float, slack_time: float = 0.001, time_func=time.monotonic
+) -> None:
     t_start = time_func()
     t_wait = t_end - t_start
     if t_wait > 0:
@@ -43,7 +53,7 @@ def precise_wait(t_end: float, slack_time: float = 0.001, time_func=time.monoton
 
 
 @contextmanager
-def suppress_stdout():
+def suppress_stdout() -> Iterator[None]:
     fd = sys.stdout.fileno()
 
     def _redirect_stdout(to):
@@ -86,8 +96,7 @@ class DataCollectorSpaceMouse:
         small_sim_img_size: bool = False,
         verbose: bool = True,
         show_pbar: bool = False,
-        obs_type: str = "state",
-        encoder_type: str = "vip",
+        obs_type: ObservationMode = "state",
         ctrl_mode: str = "osc",
         ee_laser: bool = True,
         right_multiply_rot: bool = True,
@@ -112,12 +121,7 @@ class DataCollectorSpaceMouse:
             right_multiply_rot (bool): If True, convert rotation actions (delta rot) assuming they're applied as RIGHT multiplys (local rotations)
         """
         if is_sim:
-            sim_type = dict(
-                state="FurnitureSimState-v0",
-                full="FurnitureSimFull-v0",
-                image="FurnitureSimFull-v0",
-                feature="FurnitureSimImageFeature-v0",
-            )[obs_type]
+            sim_type = SIM_OBSERVATION_TO_ENV_ID[obs_type]
 
             kwargs = dict(
                 furniture=furniture,
@@ -132,16 +136,11 @@ class DataCollectorSpaceMouse:
                 ctrl_mode=ctrl_mode,
                 ee_laser=ee_laser,
             )
-            if obs_type != "feature":
-                kwargs.update(
-                    resize_img=small_sim_img_size,
-                    np_step_out=False,  # Always output Tensor in this setting. Will change to numpy in this code.
-                    channel_first=False,
-                )
-            if obs_type == "feature":
-                kwargs.update(
-                    encoder_type=encoder_type,
-                )
+            kwargs.update(
+                resize_img=small_sim_img_size,
+                np_step_out=False,  # Convert to numpy explicitly inside this collector.
+                channel_first=False,
+            )
 
             self.env = gym.make(sim_type, **kwargs)
         else:
@@ -186,13 +185,13 @@ class DataCollectorSpaceMouse:
 
         self._reset_collector_buffer()
 
-    def _squeeze_and_numpy(self, v):
+    def _squeeze_and_numpy(self, v: Any) -> Any:
         if isinstance(v, torch.Tensor):
             v = v.cpu().numpy()
         v = v.squeeze()
         return v
 
-    def _set_dictionary(self, to, from_):
+    def _set_dictionary(self, to: dict[str, Any], from_: dict[str, Any]) -> None:
         if self.obs_type in ["full", "image"]:
             to["color_image1"] = from_["color_image1"]
             to["color_image2"] = from_["color_image2"]
@@ -206,13 +205,9 @@ class DataCollectorSpaceMouse:
         if self.obs_type in ["state", "full"]:
             to["parts_poses"] = from_["parts_poses"]
 
-        if self.obs_type == "feature":
-            to["feature1"] = from_["image1"]
-            to["feature2"] = from_["image2"]
-
         to["robot_state"] = from_["robot_state"]
 
-    def collect(self):
+    def collect(self) -> None:
         self.verbose_print("[data collection] Start collecting the data!")
 
         from collections import namedtuple
@@ -540,7 +535,7 @@ class DataCollectorSpaceMouse:
 
         return obs
 
-    def _reset_collector_buffer(self):
+    def _reset_collector_buffer(self) -> None:
         self.obs = []
         self.org_obs = []
         self.acts = []
@@ -630,11 +625,11 @@ class DataCollectorSpaceMouse:
             pickle.dump(data, f)
         self.verbose_print(f"Data saved at {path}")
 
-    def verbose_print(self, *args, **kwargs):
+    def verbose_print(self, *args: Any, **kwargs: Any) -> None:
         if self.verbose:
             print(*args, **kwargs)
 
-    def update_pbar(self):
+    def update_pbar(self) -> None:
         if self.pbar is not None:
             self.pbar.update(1)
 

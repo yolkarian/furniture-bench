@@ -1,6 +1,4 @@
-"""
-Register FurnitureBench and FurnitureSim environments to OpenAI Gym.
-"""
+"""Register the supported FurnitureBench and FurnitureSim environments."""
 
 from gymnasium.envs.registration import register
 
@@ -17,12 +15,6 @@ register(
     entry_point="furniture_bench.envs.policy_envs.furniture_bench_image:FurnitureBenchImage",
 )
 
-# FurnitureBench with R3M or VIP image feature observation.
-register(
-    id="FurnitureBenchImageFeature-v0",
-    entry_point="furniture_bench.envs.policy_envs.furniture_bench_image_feature:FurnitureBenchImageFeature",
-)
-
 # FurnitureSim environment.
 register(
     id="FurnitureSim-v0",
@@ -36,12 +28,6 @@ register(
     entry_point="furniture_bench.envs.furniture_sim_env:FurnitureSimFullEnv",
 )
 
-# FurnitureSim with R3M or VIP image feature observation.
-register(
-    id="FurnitureSimImageFeature-v0",
-    entry_point="furniture_bench.envs.policy_envs.furniture_sim_image_feature:FurnitureSimImageFeature",
-)
-
 # FurnitureSim environment with state observations.
 register(
     id="FurnitureSimState-v0",
@@ -52,9 +38,4 @@ register(
 register(
     id="FurnitureDummy-v0",
     entry_point="furniture_bench.envs.policy_envs.furniture_dummy:FurnitureDummy",
-)
-
-register(
-    id="FurnitureImageFeatureDummy-v0",
-    entry_point="furniture_bench.envs.policy_envs.furniture_image_feature_dummy:FurnitureImageFeatureDummy",
 )

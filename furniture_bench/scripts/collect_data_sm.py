@@ -9,7 +9,7 @@ from furniture_bench.config import config
 from furniture_bench.envs.initialization_mode import Randomness
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Collect IL data")
     parser.add_argument(
         "--out-data-path", help="Path to directory to save the data", required=True
@@ -54,6 +54,13 @@ def main():
     parser.add_argument("--randomness", default="low", choices=["low", "med", "high"])
     parser.add_argument("--gpu-id", default=0, type=int)
     parser.add_argument("--num-demos", default=100, type=int)
+    parser.add_argument(
+        "--obs-type",
+        type=str,
+        choices=["state", "full", "image"],
+        default="image",
+        help="Observation mode to store in the dataset.",
+    )
 
     parser.add_argument(
         "--ctrl-mode",
@@ -86,7 +93,7 @@ def main():
         headless=args.headless,
         draw_marker=args.draw_marker,
         manual_label=args.manual_label,
-        obs_type='image',
+        obs_type=args.obs_type,
         resize_img_after_sim=False, 
         small_sim_img_size=True,  # raw sim images come downsized (i.e., don't call separate resize function)
         scripted=args.scripted,

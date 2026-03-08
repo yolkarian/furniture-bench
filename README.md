@@ -1,84 +1,67 @@
-# FurnitureBench: Reproducible Real-World Furniture Assembly Benchmark
+# FurnitureBench (Refactored)
 
-[**Paper**](http://arxiv.org/abs/2305.12821)
-| [**Website**](https://clvrai.com/furniture-bench/)
-| [**Documentation**](https://clvrai.github.io/furniture-bench/docs/index.html)
+This repository contains the refactored SAPIEN-based `furniture_bench` package and the scripts that are still supported by the current project layout.
 
-![FurnitureBench](furniture_bench_banner.jpg)
+## Scope of this refactor
 
-FurnitureBench is the real-world furniture assembly benchmark, which aims at providing a reproducible and easy-to-use platform for long-horizon complex robotic manipulation.
+The repository now focuses on:
+- the `furniture_bench` Python package
+- simulator and data-collection scripts that use `furniture_bench`
+- the offline IQL workflow under `implicit_q_learning`
+- Project documentation in `docs/`
 
-This is a fork of FurnitureBench. The main difference in this fork is that it utilizes [SAPIEN](https://github.com/haosulab/SAPIEN) as the simulator for FurnitureSim with support for Python 3.9+. (For this installation, please refer to [FurnitureSim section](#FurnitureSim)) and also guide and tutorials in the [online document](https://clvrai.github.io/furniture-bench/docs/index.html) of the original author.
+The following legacy components were removed from the supported workflow:
+- bundled `r3m` and `vip` feature encoders
+- the bundled `rolf` training stack
+- simulator-side image-feature environments and encoder-specific data paths
 
-It features
-- Long-horizon complex manipulation tasks
-- Standardized environment setup
-- Python-based robot control stack
-- FurnitureSim: a simulated environment
-- Large-scale teleoperation dataset (200+ hours)
+## Supported workflows
 
-Please check out our [website](https://clvrai.com/furniture-bench/) for more details.
+1. Install the package and offline-learning extras:
 
-
-## FurnitureBench
-
-We elaborate on the real-world environment setup guide and tutorials in our [online document](https://clvrai.github.io/furniture-bench/docs/index.html).
-
-
-
-## FurnitureSim
-
-FurnitureSim in this fork is a simulator based on SAPIEN. FurnitureSim works on any Linux and Python 3.9. Original FurnitureSim is a simulator based on Isaac Gym. 
-
-
-### SAPIEN Installation 
-For the installation of FurnitureSim of this branch, please download the wheels in releases of this [repository](https://github.com/yolkarian/SAPIEN) (Customized SAPIEN simulator with fixed URDF loader) and use `pip` to install.
-
-You might not need CUDA for the installation of SAPIEN but NVIDIA GPU is needed since we enforce GPU simulation for FurnitureSim. In addition, the NVIDIA GPU driver should meet some requirements. Please find the details on this [page](https://sapien-sim.github.io/docs/user_guide/getting_started/installation.html)
-
-### FurnitureBench Installation
-
-After installation of SAPIEN, in the folder of this repo, run:
 ```bash
 pip install -e .
+bash install_model_deps.sh
 ```
 
-## Roadmap
+2. Run a simulator environment:
 
-### Tested
-
-- Simulator with Data Collection
-- Successful furniture assembly with handcrafted scripts.
-
-### TODO
-
-- More realistic Rasterization-based Render (New Shader)
-- Removal of Isaacgym in bash scripts
-- Recording during the simulation
-- Evaluation with approaches from the original FurnitureBench
-- Test reinforcement learning (fine-tuning) in the environment
-
-
-## Citation
-
-If you find FurnitureBench useful for your research, please cite this work:
-```
-@inproceedings{heo2023furniturebench,
-    title={FurnitureBench: Reproducible Real-World Benchmark for Long-Horizon Complex Manipulation},
-    author={Minho Heo and Youngwoon Lee and Doohyun Lee and Joseph J. Lim},
-    booktitle={Robotics: Science and Systems},
-    year={2023}
-}
+```bash
+python -m furniture_bench.scripts.run_sim_env --furniture one_leg --num-envs 4
 ```
 
+3. Collect demonstrations with a SpaceMouse:
 
-## References
+```bash
+python -m furniture_bench.scripts.collect_data_sm \
+  --out-data-path data/demos \
+  --furniture one_leg \
+  --is-sim \
+  --obs-type image
+```
 
-- Polymetis: https://github.com/facebookresearch/polymetis
-- BC: Youngwoon's [robot-learning repo](https://github.com/youngwoon/robot-learning).
-- IQL: https://github.com/ikostrikov/implicit_q_learning
-- R3M: https://github.com/facebookresearch/r3m
-- VIP: https://github.com/facebookresearch/vip
-- Factory: https://github.com/NVIDIA-Omniverse/IsaacGymEnvs/blob/main/docs/factory.md
-- OSC controller references: https://github.com/StanfordVL/perls2 and https://github.com/ARISE-Initiative/robomimic and https://github.com/ARISE-Initiative/robosuite
+4. Replay a recorded trajectory:
 
+```bash
+python scripts/replay.py --task one_leg --record-path /path/to/record.safetensors
+```
+
+5. Train or evaluate the offline IQL pipeline:
+
+```bash
+python implicit_q_learning/train_offline.py --env_name FurnitureSimState-v0/one_leg --data_path data/Image/one_leg.pkl
+python implicit_q_learning/test_offline.py --env_name FurnitureSimState-v0/one_leg --run_name local_run --save_dir checkpoints
+```
+
+## Documentation
+
+- [Project docs](docs/README.md)
+- [User guide](docs/user-guide.md)
+- [Developer guide](docs/developer-guide.md)
+- [Migration notes](docs/migration.md)
+
+## Notes
+
+- `SAPIEN/` and `ManiSkill/` were kept intact and can still be used as local references while developing against this project.
+- `GPUMemoryConfig` now scales from `num_envs`, so multi-environment simulator runs no longer rely on a fixed GPU buffer size.
+- All new documentation added by this refactor is written in English.

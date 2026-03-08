@@ -1,3 +1,4 @@
+from copy import deepcopy
 import sapien.core
 import sapien
 import sapien.physx
@@ -88,7 +89,7 @@ class FurnitureSimRLEnv(gym.Env):
         self,
         furniture: str,
         num_envs: int = 1,
-        obs_keys: List[str] = None,
+        obs_keys: Optional[List[str]] = None,
         act_rot_repr: Literal["quat", "rot_6d", "axis"] = "quat",
         parts_poses_in_robot_frame: bool = False,  # Or Apriltag Frame
         randomness: Union[str, Randomness] = "low",
@@ -299,15 +300,24 @@ class FurnitureSimRLEnv(gym.Env):
             device=self.device,
         )
 
+        # Use a per-instance simulator config so vectorized runs do not mutate
+        # the module-level defaults shared by other scripts.
+        self.sim_params: SimParams = deepcopy(sim_config["sim_params"])
+
         if "factory" in self.furniture_name:
             # Adjust simulation parameters
-            sim_config["sim_params"].dt = 1.0 / 120.0
-            sim_config["sim_params"].substeps = 4
-            sim_config["sim_params"].gpu_memory.max_rigid_contact_count = 6553600
-            sim_config["sim_params"].gpu_memory.max_rigid_patch_count = 2**22
+            self.sim_params.dt = 1.0 / 120.0
+            self.sim_params.substeps = 4
+            self.sim_params.gpu_memory.max_rigid_contact_count = 6553600
+            self.sim_params.gpu_memory.max_rigid_patch_count = 2**22
 
             # Adjust part friction
             sim_config["parts"]["friction"] = 0.25
+
+        # Scale GPU buffers from the active number of parallel environments.
+        self.sim_params.gpu_memory = self.sim_params.gpu_memory.scale_for_envs(
+            self.num_envs
+        )
 
         # Predefined params to load objs, actors and articulations
         self.static_obj_dict: Dict[str, str] = {
@@ -404,9 +414,9 @@ class FurnitureSimRLEnv(gym.Env):
                 )
 
         # %% General Setup of Simulator
-        sim_params: SimParams = sim_config["sim_params"]
+        sim_params: SimParams = self.sim_params
         sapien.physx.enable_gpu()
-        gpu_memory_config = sim_params.gpu_memory.dict()
+        gpu_memory_config = sim_params.gpu_memory.as_dict()
         try:
             sapien.physx.set_gpu_memory_config(**gpu_memory_config)
         except TypeError:
@@ -474,7 +484,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.act_low = torch.from_numpy(self.action_space.low).to(device=self.device)
         self.act_high = torch.from_numpy(self.action_space.high).to(device=self.device)
         self.sim_steps = math.ceil(
-            1.0 / config["robot"]["hz"] / sim_config["sim_params"].dt
+            1.0 / config["robot"]["hz"] / self.sim_params.dt
         )
         print(f"Control per {self.sim_steps} Step(s)")
 

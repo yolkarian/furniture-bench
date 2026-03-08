@@ -1,49 +1,25 @@
-import torch
-import os
+"""Legacy compatibility entry point for the refactored repository."""
 
-import hydra
-from omegaconf import OmegaConf, DictConfig
+from __future__ import annotations
 
-import furniture_bench
-from furniture_bench.utils.checkpoint import download_ckpt_if_not_exists
+SUPPORTED_WORKFLOWS = """
+The historical `run.py` entry point depended on the removed `rolf` package.
+
+Use one of the supported workflows instead:
+- `python -m furniture_bench.scripts.run_sim_env ...`
+- `python -m furniture_bench.scripts.collect_data_sm ...`
+- `python implicit_q_learning/train_offline.py ...`
+- `python implicit_q_learning/test_offline.py ...`
+
+See `docs/README.md` for the full English documentation.
+""".strip()
 
 
-@hydra.main(config_path="config", config_name="default_config")
-def main(cfg: DictConfig) -> None:
-    if cfg.num_threads > 0:
-        print(f"Setting torch.num_threads to {cfg.num_threads}")
-        torch.set_num_threads(cfg.num_threads)
-
-    download_ckpt_if_not_exists(cfg.init_ckpt_dir, cfg.run_prefix)
-
-    if cfg['env']['id'] == 'FurnitureSim-v0':
-        import sapien
-    if cfg.gpu is not None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = "{}".format(cfg.gpu)
-        cfg.device = cfg.rolf.device = "cuda"
-    else:
-        cfg.device = cfg.rolf.device = "cpu"
-
-    from rolf.main import Run
-    # make config writable
-    OmegaConf.set_struct(cfg, False)
-
-    if cfg.rolf.demo_path is not None and not cfg.rolf.demo_path.endswith('/'):
-        cfg.rolf.demo_path = cfg.rolf.demo_path + '/'
-
-    cfg.record_video = False
-    if cfg.wandb:
-        if cfg.wandb_entity is None:
-            raise Exception("Specify wandb entity")
-        if cfg.wandb_project is None:
-            raise Exception("Specify wandb project")
-    cfg.rolf.clip_obs = float("inf")  # FIX: str(inf) to float(inf) in hydra
-    cfg.rolf.precision = cfg.precision
-    cfg.rolf.is_train = cfg.is_train
-
-    # execute training code
-    Run(cfg).run()
+def main() -> int:
+    """Explain the new entry points after the legacy training stack removal."""
+    print(SUPPORTED_WORKFLOWS)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

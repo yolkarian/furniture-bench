@@ -1,9 +1,14 @@
-"""Define additional parameters based on real-world config for simulator."""
+"""Define additional simulator parameters for the SAPIEN backend."""
+
+from __future__ import annotations
+
+import math
 from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 from numpy.typing import NDArray
-from typing import Optional
+
 from furniture_bench.config import config
 
 sim_config = config.copy()
@@ -25,9 +30,17 @@ sim_config["scripted_timeout"] = {
     "stool": 1_000,  # Increased from 1300
 }
 
-# 
+def _next_power_of_two(value: int) -> int:
+    """Round a positive integer up to the next power of two."""
+    if value <= 1:
+        return 1
+    return 1 << math.ceil(math.log2(value))
+
+
 @dataclass
 class PhysxParams:
+    """Low-level PhysX scene configuration."""
+
     solver_type: int = 1   # 0 PCS 1 TGS
     bounce_threshold_velocity: float = 0.002
     num_position_iterations: int = 10
@@ -38,9 +51,9 @@ class PhysxParams:
     friction_correlation_distance: float = 0.005
     max_depenetration_velocity: float = 10
     num_threads: int = 0
-    use_gpu:bool = False
-    max_gpu_contact_pairs:int = 16055314
-    default_buffer_size_multiplier:int = 8.0
+    use_gpu: bool = False
+    max_gpu_contact_pairs: int = 16055314
+    default_buffer_size_multiplier: float = 8.0
 
     # TODO: introduce params for contact control       
     # sapien.physx.set_gpu_memory_config(max_rigid_contact_count=6553600)
@@ -48,19 +61,22 @@ class PhysxParams:
 
 @dataclass
 class GPUMemoryConfig:
+    """GPU buffer capacities sized from the active `num_envs` value."""
+
     # More generous defaults for contact-heavy furniture assembly. An RTX 5090
     # has enough headroom for larger PhysX GPU buffers, and we have already seen
     # PhysX request collisionStackSize >= 10_097_008, so use the next power of 2.
-    temp_buffer_capacity: int = 2**25
-    max_rigid_contact_count: int = 2**22
-    max_rigid_patch_count: int = 2**21
-    heap_capacity: int = 2**27
-    found_lost_pairs_capacity: int = 2**26
-    found_lost_aggregate_pairs_capacity: int = 2**10
-    total_aggregate_pairs_capacity: int = 2**10
-    collision_stack_size: int = 2**24
+    temp_buffer_capacity: int = 2**17
+    max_rigid_contact_count: int = 2**16
+    max_rigid_patch_count: int = 2**13
+    heap_capacity: int = 2**19
+    found_lost_pairs_capacity: int = 2**18
+    found_lost_aggregate_pairs_capacity: int = 2**4
+    total_aggregate_pairs_capacity: int = 2**4
+    collision_stack_size: int = 2**16
 
-    def dict(self):
+    def as_dict(self) -> dict[str, int]:
+        """Return a plain dictionary accepted by `sapien.physx` helpers."""
         return {
             "temp_buffer_capacity": self.temp_buffer_capacity,
             "max_rigid_contact_count": self.max_rigid_contact_count,
@@ -72,11 +88,32 @@ class GPUMemoryConfig:
             "collision_stack_size": self.collision_stack_size,
         }
 
+    def dict(self) -> dict[str, int]:
+        """Backward-compatible alias for legacy call sites."""
+        return self.as_dict()
+
+    def scale_for_envs(self, num_envs: int) -> "GPUMemoryConfig":
+        """Scale every GPU buffer linearly with `num_envs`.
+
+        The values are rounded to the next power of two because PhysX GPU
+        allocators behave better with aligned capacities and the historical
+        defaults were already expressed as powers of two.
+        """
+
+        env_count = max(1, num_envs)
+        scaled_fields = {
+            field_name: _next_power_of_two(field_value * env_count)
+            for field_name, field_value in self.as_dict().items()
+        }
+        return GPUMemoryConfig(**scaled_fields)
+
 
 @dataclass
 class SimParams:
+    """High-level simulator configuration shared across scenes."""
+
     # up_axis
-    gravity: np.ndarray = field(
+    gravity: NDArray[np.float32] = field(
         default_factory=lambda: np.array([0.0, 0.0, -9.8], dtype=np.float32)
     )
     dt: float = 1.0 / 60.0
@@ -87,34 +124,32 @@ class SimParams:
 
 @dataclass
 class AssetOptions:
+    """URDF loading options used while creating SAPIEN actors."""
+
     flip_visual_attachments: bool = False # NOTE:(Yuke)
-    fix_base_link:bool = False
-    thickness:float = 0.0
-    density:float = 600.0
-    armature:float = 0.01
-    linear_damping:float = 0.0
-    max_linear_velocity:float = 1000.0
-    angular_damping:float = 0.0
-    max_angular_velocity:float = 1000.0
-    disable_gravity:bool = False
-    enable_gyroscopic_forces:bool = True
+    fix_base_link: bool = False
+    thickness: float = 0.0
+    density: float = 600.0
+    armature: float = 0.01
+    linear_damping: float = 0.0
+    max_linear_velocity: float = 1000.0
+    angular_damping: float = 0.0
+    max_angular_velocity: float = 1000.0
+    disable_gravity: bool = False
+    enable_gyroscopic_forces: bool = True
     # NOTE(YUKE): Sapien cannot set the following parameters: flip_visual_attachments, thickness, max_linear_velocity, max_angular_velocity, enable_gyroscopic_forces
 
 
 @dataclass
 class CameraCfg:
-    name:Optional[str] = None
-    width:int = 1280
-    height:int = 720
-    fovy:float = np.deg2rad(40)
-    near:float = 0.001
-    far:float = 2.0
+    """Simple camera specification used by the simulator."""
 
-    
-
-
-
-
+    name: Optional[str] = None
+    width: int = 1280
+    height: int = 720
+    fovy: float = np.deg2rad(40)
+    near: float = 0.001
+    far: float = 2.0
 
 # Simulator options.
 sim_params = SimParams()
@@ -175,7 +210,8 @@ Set density for each furniture part.
   - The mass is estimated using 3D printer slicer.
 """
 
-def default_asset_options():
+def default_asset_options() -> AssetOptions:
+    """Build the default asset options shared by furniture parts."""
     asset_options = AssetOptions()
     asset_options.flip_visual_attachments = False
     asset_options.fix_base_link = False
