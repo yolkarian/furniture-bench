@@ -1,18 +1,12 @@
-"""Calibrate extrinsic of the front camera"""
+"""Calibrate the front-camera extrinsics against a reference setup."""
+
+from __future__ import annotations
+
 import argparse
-import time
-import cv2
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
-
-from furniture_bench.utils.pose import mat_to_roll_pitch_yaw
-from furniture_bench.perception.apriltag import AprilTag
-from furniture_bench.perception.realsense import RealsenseCam
-from furniture_bench.utils.detection import get_cam_to_base
-from furniture_bench.config import config
-from furniture_bench.utils.draw import draw_axis
-
 
 ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets")
 
@@ -163,11 +157,34 @@ avg_pose["setup_front"] = avg_pose["one_leg"]
 avg_pose["obstacle"] = avg_pose["one_leg"]
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Build the calibration CLI parser."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default="one_leg")
+    return parser
 
-    args = parser.parse_args()
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    return build_parser().parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Start the interactive camera-extrinsics calibration view."""
+    args = parse_args(argv)
+
+    # Delay hardware imports until after parsing so ``--help`` works without the
+    # RealSense and AprilTag runtime dependencies installed.
+    import cv2
+    import time
+
+    from furniture_bench.config import config
+    from furniture_bench.perception.apriltag import AprilTag
+    from furniture_bench.perception.realsense import RealsenseCam
+    from furniture_bench.utils.detection import get_cam_to_base
+    from furniture_bench.utils.draw import draw_axis
+    from furniture_bench.utils.pose import mat_to_roll_pitch_yaw
+
     cam2 = RealsenseCam(
         config["camera"][2]["serial"],
         config["camera"]["color_img_size"],
@@ -260,9 +277,11 @@ def main():
         cv2.putText(
             dst,
             "x rot: {0}{1:0.3f}".format(
-                "+"
-                if (np.degrees(cam2_xyz_rot[0]) - np.degrees(avg_pose_rot[0])) > 0
-                else "",
+                (
+                    "+"
+                    if (np.degrees(cam2_xyz_rot[0]) - np.degrees(avg_pose_rot[0])) > 0
+                    else ""
+                ),
                 (np.degrees(cam2_xyz_rot[0]) - np.degrees(avg_pose_rot[0])),
             ),
             org=(50, 200),
@@ -279,9 +298,11 @@ def main():
         cv2.putText(
             dst,
             "y rot: {0}{1:0.3f}".format(
-                "+"
-                if (np.degrees(cam2_xyz_rot[1]) - np.degrees(avg_pose_rot[1])) > 0
-                else "",
+                (
+                    "+"
+                    if (np.degrees(cam2_xyz_rot[1]) - np.degrees(avg_pose_rot[1])) > 0
+                    else ""
+                ),
                 (np.degrees(cam2_xyz_rot[1]) - np.degrees(avg_pose_rot[1])),
             ),
             org=(50, 250),
@@ -298,9 +319,11 @@ def main():
         cv2.putText(
             dst,
             "z rot: {0}{1:0.3f}".format(
-                "+"
-                if (np.degrees(cam2_xyz_rot[2]) - np.degrees(avg_pose_rot[2])) > 0
-                else "",
+                (
+                    "+"
+                    if (np.degrees(cam2_xyz_rot[2]) - np.degrees(avg_pose_rot[2])) > 0
+                    else ""
+                ),
                 (np.degrees(cam2_xyz_rot[2]) - np.degrees(avg_pose_rot[2])),
             ),
             org=(50, 300),

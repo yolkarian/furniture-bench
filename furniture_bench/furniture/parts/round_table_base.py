@@ -4,7 +4,7 @@ import torch
 from furniture_bench.utils.pose import get_mat, rot_mat
 from furniture_bench.furniture.parts.part import Part
 import furniture_bench.utils.transform as T
-import furniture_bench.controllers.control_utils as C
+import furniture_bench.utils.control as C
 from furniture_bench.config import config
 
 

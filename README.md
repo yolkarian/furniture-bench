@@ -1,36 +1,57 @@
-# FurnitureBench (Refactored)
+# FurnitureBench
 
-This repository contains the refactored SAPIEN-based `furniture_bench` package and the scripts that are still supported by the current project layout.
+A cleaned-up, SAPIEN-based version of `furniture_bench` focused on the maintained simulator, data-collection, replay, and dataset-preparation workflows.
 
-## Scope of this refactor
+## Repository scope
 
-The repository now focuses on:
+This repository now centers on:
 - the `furniture_bench` Python package
-- simulator and data-collection scripts that use `furniture_bench`
-- the offline IQL workflow under `implicit_q_learning`
-- Project documentation in `docs/`
+- maintained Python entry points under `furniture_bench/scripts/`
+- maintained top-level helpers under `scripts/`
+- project documentation under `docs/`
 
-The following legacy components were removed from the supported workflow:
-- bundled `r3m` and `vip` feature encoders
-- the bundled `rolf` training stack
-- simulator-side image-feature environments and encoder-specific data paths
+The repository no longer bundles:
+- the old offline RL / IQL stack
+- vendored wheel artifacts
+- the unused top-level `config/` directory
+- legacy controller implementations other than DiffIK
 
-## Supported workflows
+## Quick start
 
-1. Install the package and offline-learning extras:
+### 1. Install
+
+Python requirement:
+- Python `>=3.8,<3.11`
+
+Install the package directly:
 
 ```bash
 pip install -e .
-bash install_model_deps.sh
 ```
 
-2. Run a simulator environment:
+Or use the compatibility helper:
 
 ```bash
-python -m furniture_bench.scripts.run_sim_env --furniture one_leg --num-envs 4
+bash scripts/install_model_deps.sh
 ```
 
-3. Collect demonstrations with a SpaceMouse:
+### 2. Run the simulator
+
+Run a scripted one-leg assembly episode:
+
+```bash
+python -m furniture_bench.scripts.run_sim_env --furniture one_leg --scripted
+```
+
+Run a headless smoke test:
+
+```bash
+python -m furniture_bench.scripts.run_sim_env --furniture one_leg --scripted --headless
+```
+
+### 3. Collect demonstrations
+
+SpaceMouse-based collection in simulation:
 
 ```bash
 python -m furniture_bench.scripts.collect_data_sm \
@@ -40,28 +61,57 @@ python -m furniture_bench.scripts.collect_data_sm \
   --obs-type image
 ```
 
-4. Replay a recorded trajectory:
+Classic keyboard / Oculus collection:
+
+```bash
+python -m furniture_bench.scripts.collect_data \
+  --out-data-path data/demos \
+  --furniture one_leg \
+  --is-sim
+```
+
+### 4. Replay a recorded trajectory
 
 ```bash
 python scripts/replay.py --task one_leg --record-path /path/to/record.safetensors
 ```
 
-5. Train or evaluate the offline IQL pipeline:
+### 5. Dataset utilities
+
+Download a dataset archive:
 
 ```bash
-python implicit_q_learning/train_offline.py --env_name FurnitureSimState-v0/one_leg --data_path data/Image/one_leg.pkl
-python implicit_q_learning/test_offline.py --env_name FurnitureSimState-v0/one_leg --run_name local_run --save_dir checkpoints
+python -m furniture_bench.scripts.download_dataset \
+  --randomness low \
+  --furniture one_leg \
+  --out_dir data
 ```
+
+Preprocess collected pickles:
+
+```bash
+python -m furniture_bench.scripts.preprocess_data \
+  --in-data-path data/raw \
+  --out-data-path data/processed
+```
+
+## Main behavior changes after cleanup
+
+- DiffIK is now the only maintained controller path.
+- Some CLI flags still accept `osc` as a **compatibility alias** and internally map it to DiffIK.
+- Top-level shell scripts were moved into `scripts/`.
+- Historical root shell command paths still work through compatibility symlinks.
+- `SAPIEN/` and `ManiSkill/` are still present as local reference trees, but they are not the primary editable target of this repository.
 
 ## Documentation
 
-- [Project docs](docs/README.md)
+- [Documentation index](docs/README.md)
 - [User guide](docs/user-guide.md)
 - [Developer guide](docs/developer-guide.md)
 - [Migration notes](docs/migration.md)
+- [Repository structure](STRUCTURE.md)
 
 ## Notes
 
-- `SAPIEN/` and `ManiSkill/` were kept intact and can still be used as local references while developing against this project.
-- `GPUMemoryConfig` now scales from `num_envs`, so multi-environment simulator runs no longer rely on a fixed GPU buffer size.
-- All new documentation added by this refactor is written in English.
+- The maintained docs in this repository describe the project-owned code and workflows. Vendored third-party trees keep their own upstream documentation.
+- For shell helpers, prefer the real files under `scripts/`; the root-level shell files are compatibility links.

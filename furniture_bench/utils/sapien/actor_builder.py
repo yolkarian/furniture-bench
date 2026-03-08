@@ -6,8 +6,6 @@ import typing
 from typing import List, Union, Dict, Any, Tuple, Literal, Optional
 
 
-
-
 def preprocess_mesh_file(filename: str):
     """
     Process input mesh file to a SAPIEN supported format
@@ -63,7 +61,6 @@ class CollisionShapeRecord:
     decomposition_params: Union[Dict[str, Any], None] = None
 
 
-
 @dataclass
 class VisualShapeRecord:
     type: Literal["file", "plane", "box", "capsule", "sphere", "cylinder"]
@@ -91,7 +88,7 @@ class ActorBuilder:
         self.visual_records: List[VisualShapeRecord] = []
         self.use_density = True
         self.collision_groups = [1, 1, 0, 0]
-        self.scene:Optional[sapien.Scene] = None
+        self.scene: Optional[sapien.Scene] = None
         self.physx_body_type = "dynamic"
         self.name = ""
 
@@ -136,7 +133,7 @@ class ActorBuilder:
             else:
                 assert r.material is None or isinstance(
                     r.material, sapien.render.RenderMaterial
-                )    # gravity property is temporarily placed here.
+                )  # gravity property is temporarily placed here.
             if r.type == "plane":
                 shape = sapien.render.RenderShapePlane(r.scale, r.material)
             elif r.type == "box":
@@ -292,7 +289,7 @@ class ActorBuilder:
 
         entity = self.build_entity()
         entity.name = self.name
-        entity.set_pose(self.initial_pose) # set pose before adding to scene
+        entity.set_pose(self.initial_pose)  # set pose before adding to scene
         self.scene.add_entity(entity)
         return entity
 

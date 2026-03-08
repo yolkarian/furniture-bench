@@ -4,7 +4,7 @@ import torch
 from furniture_bench.furniture.parts.part import Part
 from furniture_bench.utils.pose import get_mat, rot_mat
 import furniture_bench.utils.transform as T
-import furniture_bench.controllers.control_utils as C
+import furniture_bench.utils.control as C
 from furniture_bench.config import config
 
 
@@ -193,7 +193,9 @@ class LampHood(Part):
                 self.prev_pose = target
                 next_state = "move_center"
         elif self._state == "move_center":
-            target_pos = torch.tensor([self.prev_pose[0, 3], 0.0, self.prev_pose[2, 3]], device=device)
+            target_pos = torch.tensor(
+                [self.prev_pose[0, 3], 0.0, self.prev_pose[2, 3]], device=device
+            )
             target_ori = self.prev_pose[:3, :3]
             target = self.add_noise_first_target(
                 C.to_homogeneous(target_pos, target_ori)

@@ -31,9 +31,7 @@ RUN apt update \
     && apt install -y libcanberra-gtk-module libcanberra-gtk3-module libusb-1.0-0-dev \
     && /opt/conda/envs/${VENV_NAME}/bin/pip install pyrealsense2
 
-RUN mkdir /wheels
-COPY wheels/dt_apriltags-3.2.0-py3-none-manylinux2010_x86_64.whl /wheels
-RUN /opt/conda/envs/${VENV_NAME}/bin/pip install /wheels/dt_apriltags-3.2.0-py3-none-manylinux2010_x86_64.whl
+RUN /opt/conda/envs/${VENV_NAME}/bin/pip install dt-apriltags
 
 # Install python packages.
 RUN /opt/conda/envs/${VENV_NAME}/bin/pip install pip==22.2.2
@@ -106,7 +104,7 @@ RUN /opt/conda/envs/${VENV_NAME}/bin/pip install setuptools==58
 RUN /opt/conda/envs/${VENV_NAME}/bin/pip install numpy==1.23.5
 
 # Copy the entrypoint.sh script to the Docker image
-COPY entrypoint.sh /entrypoint.sh
+COPY scripts/entrypoint.sh /entrypoint.sh
 
 # Make the entrypoint.sh script executable
 RUN chmod +x /entrypoint.sh

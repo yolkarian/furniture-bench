@@ -4,7 +4,7 @@ import torch
 
 from furniture_bench.utils.pose import get_mat, rot_mat
 from furniture_bench.furniture.parts.part import Part
-import furniture_bench.controllers.control_utils as C
+import furniture_bench.utils.control as C
 import furniture_bench.utils.transform as T
 from furniture_bench.config import config
 
@@ -31,20 +31,20 @@ class CabinetTop(Part):
         self.reset_x_len = 0.0565
         self.reset_y_len = 0.09525
         self._state = "reach_body_grasp_xy"
-        
+
         self.skill_complete_next_states = [
             "release_gripper",
             "lift_up_top",
             "insert_body",
             "done",
         ]  # Specificy next state after skill is complete. Screw done is handle in `get_assembly_action`
-        
+
         self.body_grip_width = 0.057
         self.width = 0.1
 
     def is_in_reset_ori(self, pose, from_skill, ori_bound):
         return pose[1, 0] > ori_bound or pose[1, 0] <= -ori_bound
-    
+
     def reset(self):
         self.pre_assemble_done = False
         self._state = "reach_body_grasp_xy"
@@ -72,18 +72,22 @@ class CabinetTop(Part):
         device = body_pose.device
 
         if self._state == "reach_body_grasp_xy":
-            pos = torch.concat([body_pose[:3, 3], torch.tensor([1.0]).float().to(body_pose.device)])
+            pos = torch.concat(
+                [body_pose[:3, 3], torch.tensor([1.0]).float().to(body_pose.device)]
+            )
 
             target_pos = (april_to_robot @ pos)[:3]
             target_ori = (
-                april_to_robot @
+                april_to_robot
+                @
                 # C.rot_mat_tensor(0, np.pi / 2 + np.pi / 8, np.pi / 2, device) @
-                torch.tensor(
-                    get_mat([0, 0, 0], [0, np.pi / 2 + np.pi / 10, np.pi / 2])).to(device).float() @
-                body_pose
+                torch.tensor(get_mat([0, 0, 0], [0, np.pi / 2 + np.pi / 10, np.pi / 2]))
+                .to(device)
+                .float()
+                @ body_pose
             )[:3, :3]
             target_pos[2] = ee_pos[2]
-            target_pos[0] -= 0.075 # Move beind from the body.
+            target_pos[0] -= 0.075  # Move beind from the body.
             target = C.to_homogeneous(target_pos, target_ori)
             if self.satisfy(ee_pose, target):
                 self.prev_pose = target
@@ -123,11 +127,13 @@ class CabinetTop(Part):
             if self.gripper_greater(
                 gripper_width,
                 config["robot"]["max_gripper_width"]["cabinet"] - 0.001,
-                cnt_max=20
+                cnt_max=20,
             ):
                 self.prev_pose = target
                 next_state = "move_up"
-        elif self._state == "move_up": # Go slightly up to avoid collision with the body.
+        elif (
+            self._state == "move_up"
+        ):  # Go slightly up to avoid collision with the body.
             self.gripper_action = -1
             target_pos = self.prev_pose[:3, 3] + torch.tensor(
                 [0, 0, 0.04], device=device
@@ -153,16 +159,16 @@ class CabinetTop(Part):
             self.gripper_action = -1
             self.pre_assemble_done = True
             target = self.prev_pose
-        
+
         skill_complete = self.may_transit_state(next_state)
 
         return (
             target[:3, 3],
             C.mat2quat(target[:3, :3]),
             torch.tensor([self.gripper_action]).to(ee_pos.device),
-            skill_complete
+            skill_complete,
         )
-    
+
     def fsm_step(
         self,
         ee_pos,
@@ -192,14 +198,16 @@ class CabinetTop(Part):
         device = ee_pose.device
 
         if self._state == "reach_top_floor_xy":
-            target_ori = (april_to_robot @
-                torch.tensor(
-                    get_mat([0, 0, 0], [0, -np.pi / 2, 0])).to(device).float() @
-                top_pose
+            target_ori = (
+                april_to_robot
+                @ torch.tensor(get_mat([0, 0, 0], [0, -np.pi / 2, 0]))
+                .to(device)
+                .float()
+                @ top_pose
             )[:3, :3]
             pos = top_pose[:4, 3]
             target_pos = (april_to_robot @ pos)[:3]
-            target_pos[2] = ee_pos[2] # Keep the z.
+            target_pos[2] = ee_pos[2]  # Keep the z.
             target = C.to_homogeneous(target_pos, target_ori)
             if self.satisfy(ee_pose, target, pos_error_threshold=0.02, max_len=100):
                 self.prev_pose = target.clone()
@@ -210,13 +218,17 @@ class CabinetTop(Part):
             target_ori = self.prev_pose[:3, :3]
             target = C.to_homogeneous(target_pos, target_ori)
             target[2, 3] += 0.01
-            if self.satisfy(ee_pose, target, pos_error_threshold=0.01, ori_error_threshold=0.3):
+            if self.satisfy(
+                ee_pose, target, pos_error_threshold=0.01, ori_error_threshold=0.3
+            ):
                 self.prev_pose = target
                 next_state = "pick_top"
         elif self._state == "pick_top":
             target = self.prev_pose
             self.gripper_action = 1
-            if self.gripper_less(gripper_width, self.body_grip_width + 0.001, cnt_max=20):
+            if self.gripper_less(
+                gripper_width, self.body_grip_width + 0.001, cnt_max=20
+            ):
                 self.prev_pose = target
                 next_state = "lift_up_top"
         elif self._state == "lift_up_top":
@@ -257,8 +269,11 @@ class CabinetTop(Part):
             # Keep the z.
             target[2, 3] = self.prev_pose[2, 3]
             if self.satisfy(
-                ee_pose, target, pos_error_threshold=0.0, ori_error_threshold=0.0,
-                max_len=50
+                ee_pose,
+                target,
+                pos_error_threshold=0.0,
+                ori_error_threshold=0.0,
+                max_len=50,
             ):
                 self.prev_pose = target
                 next_state = "reach_body_top_z"
@@ -272,15 +287,15 @@ class CabinetTop(Part):
                 )
             )
             target = self.prev_pose
-            target[2, 3] = body_screw_pose_robot[2, 3] + 0.02 # Move up a bit.
+            target[2, 3] = body_screw_pose_robot[2, 3] + 0.02  # Move up a bit.
             body_screw_pose_robot[:3, :3] = self.prev_pose[:3, :3]
-            target[:3, :3] = self.prev_pose[:3, :3] # Keep the same orientation.
+            target[:3, :3] = self.prev_pose[:3, :3]  # Keep the same orientation.
             if self.satisfy(
                 ee_pose, target, pos_error_threshold=0.0, ori_error_threshold=0.0
             ):
                 self.prev_pose = target
                 next_state = "insert_body"
-        elif self._state == "insert_body": # Transition for skill labeling.
+        elif self._state == "insert_body":  # Transition for skill labeling.
             target = self.prev_pose
             self.prev_pose = target
             next_state = "screw_gripper"
@@ -318,22 +333,26 @@ class CabinetTop(Part):
         elif self._state == "pre_grasp_front":
             # Face EE front.
             target = self.prev_pose
-            target[:3, :3] =  torch.tensor(rot_mat([np.pi, 0, 0])).to(device).float()
+            target[:3, :3] = torch.tensor(rot_mat([np.pi, 0, 0])).to(device).float()
             if self.satisfy(ee_pose, target):
                 self.prev_pose = target
                 next_state = "pre_grasp_ori"
         elif self._state == "pre_grasp_ori":
             if top_pose[0, 0] > 0:
-                target_pose = (april_to_robot @
-                    top_pose @
-                    torch.tensor(
-                        get_mat([0, 0, 0], [-np.pi / 2, 0, 0])).to(device).float()
+                target_pose = (
+                    april_to_robot
+                    @ top_pose
+                    @ torch.tensor(get_mat([0, 0, 0], [-np.pi / 2, 0, 0]))
+                    .to(device)
+                    .float()
                 )
             else:
-                target_pose = (april_to_robot @
-                    top_pose @
-                    torch.tensor(
-                        get_mat([0, 0, 0], [-np.pi / 2, np.pi, 0])).to(device).float()
+                target_pose = (
+                    april_to_robot
+                    @ top_pose
+                    @ torch.tensor(get_mat([0, 0, 0], [-np.pi / 2, np.pi, 0]))
+                    .to(device)
+                    .float()
                 )
             target_ori = target_pose[:3, :3]
             target_pos = self.prev_pose[:3, 3]
@@ -343,16 +362,20 @@ class CabinetTop(Part):
                 next_state = "pre_grasp_z"
         elif self._state == "pre_grasp_z":
             if top_pose[0, 0] > 0:
-                target = (april_to_robot @
-                    top_pose @
-                    torch.tensor(
-                        get_mat([0, 0, 0], [-np.pi / 2, 0, 0])).to(device).float()
+                target = (
+                    april_to_robot
+                    @ top_pose
+                    @ torch.tensor(get_mat([0, 0, 0], [-np.pi / 2, 0, 0]))
+                    .to(device)
+                    .float()
                 )
             else:
-                target = (april_to_robot @
-                    top_pose @
-                    torch.tensor(
-                        get_mat([0, 0, 0], [-np.pi / 2, np.pi, 0])).to(device).float()
+                target = (
+                    april_to_robot
+                    @ top_pose
+                    @ torch.tensor(get_mat([0, 0, 0], [-np.pi / 2, np.pi, 0]))
+                    .to(device)
+                    .float()
                 )
             if self.satisfy(ee_pose, target, pos_error_threshold=0.01):
                 self.prev_pose = target
@@ -366,7 +389,7 @@ class CabinetTop(Part):
         elif self._state == "screw_front":
             # Face EE front.
             target = self.prev_pose
-            target[:3, :3] =  torch.tensor(rot_mat([np.pi, 0, 0])).to(device).float()
+            target[:3, :3] = torch.tensor(rot_mat([np.pi, 0, 0])).to(device).float()
             if self.satisfy(ee_pose, target):
                 self.prev_pose = target
                 next_state = "screw_gripper"

@@ -1,42 +1,83 @@
 # User Guide
 
-## 1. Installation
+## 1. Requirements
 
-Install the core package:
+Python requirement:
+- Python `>=3.8,<3.11`
+
+If you prefer the provided Conda environment file, see `environment.yml`.
+
+## 2. Installation
+
+Install the package directly:
 
 ```bash
 pip install -e .
 ```
 
-Install the remaining offline-learning extras:
+Or use the compatibility helper script:
 
 ```bash
-bash install_model_deps.sh
+bash scripts/install_model_deps.sh
 ```
 
-## 2. What is supported
+At the moment, that helper simply installs the local package in editable mode.
 
-The refactored project supports three observation families:
+## 3. Supported workflows
+
+The maintained repository supports:
+- simulator execution
+- real-world and simulator data collection
+- recorded-trajectory replay
+- dataset download
+- dataset preprocessing
+
+The repository no longer bundles offline RL / IQL training code.
+
+## 4. Supported observation families
+
+The maintained observation families are:
 - `state`
 - `full`
 - `image`
 
-The previous encoder-backed `feature` observation path is no longer part of the supported workflow.
+## 5. Running the simulator
 
-## 3. Running the simulator
-
-Run the built-in simulator script:
+Run a scripted one-leg episode:
 
 ```bash
-python -m furniture_bench.scripts.run_sim_env --furniture one_leg --num-envs 4
+python -m furniture_bench.scripts.run_sim_env --furniture one_leg --scripted
 ```
 
-Important notes:
-- `GPUMemoryConfig` now scales from `num_envs`.
-- Multi-environment runs do not rely on a fixed GPU buffer allocation anymore.
-- `SAPIEN` and `ManiSkill` remain in the repository, but they are reference codebases rather than editable targets of this refactor.
+Run the same smoke test headlessly:
 
-## 4. Collecting demonstrations
+```bash
+python -m furniture_bench.scripts.run_sim_env --furniture one_leg --scripted --headless
+```
+
+Run with a different task and multiple environments:
+
+```bash
+python -m furniture_bench.scripts.run_sim_env --furniture square_table --num-envs 4
+```
+
+Useful flags:
+- `--scripted`: use the built-in scripted assembly policy
+- `--headless`: disable the interactive viewer
+- `--num-envs`: choose vectorized simulation size
+- `--record`: record simulator video
+- `--high-res`: use higher-resolution camera images
+- `--random-action`: step using random sampled actions
+- `--no-action`: keep stepping with neutral actions
+
+Important notes:
+- `GPUMemoryConfig` scales from `num_envs`.
+- The maintained controller path is DiffIK.
+- Some older CLIs still accept `osc`; it now acts only as a compatibility alias to DiffIK.
+
+## 6. Collecting demonstrations
+
+### 6.1 SpaceMouse workflow
 
 Collect simulator demonstrations with image observations:
 
@@ -58,12 +99,32 @@ python -m furniture_bench.scripts.collect_data_sm \
   --obs-type state
 ```
 
-The collector now accepts only the supported observation modes:
-- `state`
-- `full`
-- `image`
+Important flags:
+- `--obs-type {state,full,image}`
+- `--gpu-id`
+- `--num-demos`
+- `--pkl-only`
+- `--save-failure`
+- `--headless`
 
-## 5. Replaying recorded trajectories
+### 6.2 Classic keyboard / Oculus workflow
+
+```bash
+python -m furniture_bench.scripts.collect_data \
+  --out-data-path data/demos \
+  --furniture one_leg \
+  --is-sim
+```
+
+Important flags:
+- `--input-device {keyboard,oculus,keyboard-oculus}`
+- `--scripted`
+- `--compute-device-id`
+- `--graphics-device-id`
+- `--resize-sim-img`
+- `--num-demos`
+
+## 7. Replaying recorded trajectories
 
 Replay a previously saved simulator record:
 
@@ -71,38 +132,76 @@ Replay a previously saved simulator record:
 python scripts/replay.py --task one_leg --record-path /path/to/record.safetensors
 ```
 
-This script is useful for visual inspection and regenerating rendered camera observations.
-
-## 6. Offline IQL training
-
-Train on a local dataset:
+Save regenerated rendered images:
 
 ```bash
-python implicit_q_learning/train_offline.py \
-  --env_name FurnitureSimState-v0/one_leg \
-  --data_path data/Image/one_leg.pkl \
-  --run_name one_leg_state_iql
+python scripts/replay.py \
+  --task one_leg \
+  --record-path /path/to/record.safetensors \
+  --save-output
 ```
 
-Evaluate a local checkpoint:
+This script is useful for:
+- visual inspection
+- replay debugging
+- regenerating rendered camera observations from recorded state
+
+## 8. Dataset utilities
+
+### 8.1 Download datasets
+
+Download a single dataset tarball:
 
 ```bash
-python implicit_q_learning/test_offline.py \
-  --env_name FurnitureSimState-v0/one_leg \
-  --save_dir checkpoints \
-  --run_name one_leg_state_iql
+python -m furniture_bench.scripts.download_dataset \
+  --randomness low \
+  --furniture one_leg \
+  --out_dir data
 ```
 
-Checkpoint behavior changed during the refactor:
-- the repository no longer downloads pretrained checkpoints automatically
-- evaluation expects the checkpoint directory to already exist locally
+Download and untar it immediately:
 
-## 7. Removed workflows
+```bash
+python -m furniture_bench.scripts.download_dataset \
+  --randomness low \
+  --furniture one_leg \
+  --out_dir data \
+  --untar
+```
 
-The following workflows were intentionally removed:
-- bundled `r3m` feature extraction
-- bundled `vip` feature extraction
-- bundled `rolf` training and runtime entrypoints
-- simulator-side image-feature environments
+### 8.2 Preprocess collected pickles
 
-If you need those workflows again, reintroduce them as separate optional integrations rather than as bundled repository dependencies.
+```bash
+python -m furniture_bench.scripts.preprocess_data \
+  --in-data-path data/raw \
+  --out-data-path data/processed
+```
+
+Common options:
+- `--success-only`
+- `--save-last-step`
+- `--no-robot-state`
+- `--use-all-cam`
+- `--done-when-assembled`
+- `--norm-pos-acts`
+
+## 9. Shell helpers
+
+The maintained top-level helper scripts now live under `scripts/`:
+- `scripts/install_model_deps.sh`
+- `scripts/entrypoint.sh`
+- `scripts/launch_client.sh`
+- `scripts/launch_server.sh`
+- `scripts/launch_daemon.sh`
+
+The repository root still contains compatibility symlinks with the old names.
+
+## 10. Removed workflows
+
+The following bundled components were intentionally removed:
+- offline RL / IQL training and evaluation code
+- vendored wheel artifacts under `wheels/`
+- the unused top-level `config/` directory
+- legacy controller implementations other than DiffIK
+
+If you need those workflows again, add them back as separate optional integrations rather than as bundled repository dependencies.

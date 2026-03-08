@@ -28,7 +28,6 @@ from furniture_bench.envs.initialization_mode import Randomness
 from furniture_bench.perception.image_utils import resize, resize_crop
 from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 
-
 ObservationMode = Literal["state", "full", "image"]
 
 SIM_OBSERVATION_TO_ENV_ID: dict[ObservationMode, str] = {
@@ -116,7 +115,7 @@ class DataCollectorSpaceMouse:
             pkl_only (bool): Whether to save only `pkl` files (i.e., exclude *.mp4 and *.png).
             save_failure (bool): Whether to save failure trajectories.
             num_demos (int): The maximum number of demonstrations to collect in this run. Internal loop will be terminated when this number is reached.
-            ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control)
+            ctrl_mode (str): 'diffik' is the active controller path. 'osc' is kept as a compatibility alias for older scripts.
             ee_laser (bool): If True, show a line coming from the end-effector in the viewer
             right_multiply_rot (bool): If True, convert rotation actions (delta rot) assuming they're applied as RIGHT multiplys (local rotations)
         """

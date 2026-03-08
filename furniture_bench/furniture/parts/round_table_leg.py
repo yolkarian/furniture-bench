@@ -4,7 +4,7 @@ import numpy as np
 from furniture_bench.utils.pose import get_mat, rot_mat
 from furniture_bench.utils.pose import cosine_sim
 from furniture_bench.furniture.parts.leg import Leg
-import furniture_bench.controllers.control_utils as C
+import furniture_bench.utils.control as C
 from furniture_bench.config import config
 
 

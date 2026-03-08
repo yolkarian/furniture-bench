@@ -1,4 +1,5 @@
 """Define data collection class that rollout the environment, get action from the interface (e.g., teleoperation, automatic scripts), and save data."""
+
 import time
 import pickle
 from datetime import datetime
@@ -40,7 +41,7 @@ class DataCollector:
         save_failure: bool = False,
         num_demos: int = 100,
         resize_sim_img: bool = False,
-        ctrl_mode: str = 'osc'
+        ctrl_mode: str = "osc",
     ):
         """
         Args:
@@ -59,15 +60,15 @@ class DataCollector:
             save_failure (bool): Whether to save failure trajectories.
             num_demos (int): The maximum number of demonstrations to collect in this run. Internal loop will be terminated when this number is reached.
             resize_sim_img (bool): Read resized image
-            ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control)
+            ctrl_mode (str): 'diffik' is the active controller path. 'osc' is kept as a compatibility alias for older scripts.
         """
         if is_sim:
             self.env = gym.make(
                 "FurnitureSimFull-v0",
                 furniture=furniture,
-                max_env_steps=sim_config["scripted_timeout"][furniture]
-                if scripted
-                else 3000,
+                max_env_steps=(
+                    sim_config["scripted_timeout"][furniture] if scripted else 3000
+                ),
                 headless=headless,
                 num_envs=1,  # Only support 1 for now.
                 manual_done=False if scripted else True,
@@ -77,7 +78,7 @@ class DataCollector:
                 randomness=randomness,
                 compute_device_id=compute_device_id,
                 graphics_device_id=graphics_device_id,
-                ctrl_mode=ctrl_mode
+                ctrl_mode=ctrl_mode,
             )
         else:
             if randomness == "med":
@@ -124,13 +125,14 @@ class DataCollector:
             # Get an action.
             if self.scripted:
                 action, skill_complete = self.env.get_assembly_action()
-                pos_bounds_m = 0.02 if self.env.ctrl_mode == 'diffik' else 0.025
-                ori_bounds_deg = 15 if self.env.ctrl_mode == 'diffik' else 20
+                pos_bounds_m = 0.02 if self.env.ctrl_mode == "diffik" else 0.025
+                ori_bounds_deg = 15 if self.env.ctrl_mode == "diffik" else 20
                 action = scale_scripted_action(
                     action.detach().cpu().clone(),
                     pos_bounds_m=pos_bounds_m,
                     ori_bounds_deg=ori_bounds_deg,
-                    device=self.env.device)
+                    device=self.env.device,
+                )
                 collect_enum = CollectEnum.DONE_FALSE
             else:
                 action, collect_enum = self.device_interface.get_action()

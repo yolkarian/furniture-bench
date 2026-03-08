@@ -19,7 +19,7 @@ class MimicJointRecord:
 class JointRecord:
     joint_type: str = "undefined"  # "fixed", "prismatic", "revolute"
     limits: Tuple[float] = (-np.inf, np.inf)
-    effort_limit: Optional[float] = None,
+    effort_limit: Optional[float] = (None,)
     pose_in_parent: sapien.Pose = sapien.Pose()
     pose_in_child: sapien.Pose = sapien.Pose()
     friction: float = 0
@@ -31,8 +31,8 @@ class JointRecord:
 class LinkBuilder(ActorBuilder):
     def __init__(self, index: int, parent):
         super().__init__()
-        self.parent:LinkBuilder = parent
-        self.index:int = index
+        self.parent: LinkBuilder = parent
+        self.index: int = index
         self.joint_record = JointRecord()  # Joint record of the parent joint.
         self.physx_body_type = "link"
 
@@ -40,7 +40,14 @@ class LinkBuilder(ActorBuilder):
         self.joint_record.name = name
 
     def set_joint_properties(
-        self, type, limits, pose_in_parent, pose_in_child, friction=0, damping=0, effort_limit = None
+        self,
+        type,
+        limits,
+        pose_in_parent,
+        pose_in_child,
+        friction=0,
+        damping=0,
+        effort_limit=None,
     ):
         self.joint_record = JointRecord(
             joint_type=type,
@@ -68,7 +75,7 @@ class LinkBuilder(ActorBuilder):
 
 class ArticulationBuilder:
     def __init__(self):
-        self.scene:Optional[sapien.Scene] = None
+        self.scene: Optional[sapien.Scene] = None
         self.initial_pose = sapien.Pose()
         self.link_builders: List[LinkBuilder] = []
         self.mimic_joint_records: List[MimicJointRecord] = []
@@ -89,17 +96,17 @@ class ArticulationBuilder:
 
         return builder
 
-    def build_entities(self, fix_root_link=None)->List[sapien.Entity]:
-        entities:List[sapien.Entity] = []
-        links:List[sapien.physx.PhysxRigidDynamicComponent] = []
+    def build_entities(self, fix_root_link=None) -> List[sapien.Entity]:
+        entities: List[sapien.Entity] = []
+        links: List[sapien.physx.PhysxRigidDynamicComponent] = []
         for b in self.link_builders:
             b._check()
             b.physx_body_type = "link"
 
             entity = sapien.Entity()
 
-            link_component:sapien.physx.PhysxArticulationLinkComponent = b.build_physx_component(
-                links[b.parent.index] if b.parent else None
+            link_component: sapien.physx.PhysxArticulationLinkComponent = (
+                b.build_physx_component(links[b.parent.index] if b.parent else None)
             )
 
             entity.add_component(link_component)
@@ -120,10 +127,19 @@ class ArticulationBuilder:
             ]:
                 link_component.joint.limit = np.array(b.joint_record.limits).flatten()
                 if b.joint_record.effort_limit is not None:
-                    link_component.joint.set_drive_property(0, b.joint_record.damping, force_limit=b.joint_record.effort_limit)
+                    link_component.joint.set_drive_property(
+                        0,
+                        b.joint_record.damping,
+                        force_limit=b.joint_record.effort_limit,
+                    )
                 else:
                     link_component.joint.set_drive_property(0, b.joint_record.damping)
-                link_component.joint.set_armature(b.joint_record.armature * np.ones_like(link_component.joint.get_armature(), dtype=np.float32))
+                link_component.joint.set_armature(
+                    b.joint_record.armature
+                    * np.ones_like(
+                        link_component.joint.get_armature(), dtype=np.float32
+                    )
+                )
 
             links.append(link_component)
             entities.append(entity)

@@ -1,52 +1,75 @@
 # Migration Notes
 
-## Removed modules and packages
+## 1. Removed directories and packages
 
-The following bundled packages were removed from the repository:
-- `r3m/`
-- `vip/`
-- `rolf/`
+The following bundled directories were removed:
+- `implicit_q_learning/`
+- `wheels/`
+- `config/`
 
-The following package-level environments were removed:
-- `FurnitureBenchImageFeature-v0`
-- `FurnitureSimImageFeature-v0`
-- `FurnitureImageFeatureDummy-v0`
+The following controller modules were removed:
+- `furniture_bench/controllers/osc.py`
+- `furniture_bench/controllers/diffik_qp.py`
+- `furniture_bench/controllers/control_utils.py`
 
-The following legacy scripts were removed:
-- `implicit_q_learning/extract_feature.py`
-- `implicit_q_learning/train_finetune.py`
+## 2. Structural changes
 
-## Behavioral changes
+### 2.1 Shell scripts moved into `scripts/`
 
-### Dynamic GPU memory sizing
+The substantive shell scripts now live under `scripts/`:
+- `scripts/install_model_deps.sh`
+- `scripts/entrypoint.sh`
+- `scripts/launch_client.sh`
+- `scripts/launch_server.sh`
+- `scripts/launch_daemon.sh`
 
-Before the refactor, simulator GPU buffer sizes were fixed and then patched in-place for a few special cases.
+Compatibility symlinks remain in the repository root so older command paths still resolve.
 
-After the refactor:
-- buffer sizes are derived from `num_envs`
-- scaling happens per environment instance
-- factory tasks still apply their task-specific overrides before scaling
+### 2.2 Controller cleanup
 
-### Checkpoint handling
+After cleanup:
+- DiffIK is the only maintained controller path
+- simulator code normalizes `osc` to DiffIK as a compatibility alias
+- shared control math lives in `furniture_bench/utils/control.py`
 
-Before the refactor, evaluation could trigger automatic downloads of historical checkpoints.
+### 2.3 Script modernization
 
-After the refactor:
-- checkpoint resolution is local only
-- evaluation scripts require the checkpoint directory to already exist
+Maintained Python entry points were updated to:
+- parse arguments before importing heavy runtime dependencies
+- add explicit type annotations on public helpers and entry points
+- include inline comments for behavior-critical logic
+- preserve existing CLI surfaces where practical
 
-### Data collection
+## 3. Behavior changes
 
-Before the refactor, the data collector exposed a `feature` mode tied to bundled encoders.
+### 3.1 Offline-learning workflow
 
-After the refactor, supported modes are:
-- `state`
-- `full`
-- `image`
+Before cleanup, the repository bundled an offline IQL stack.
 
-## Recommended replacements
+After cleanup:
+- the repository no longer ships offline RL training or evaluation code
+- dataset download and preprocessing utilities remain
+- external training code should now live outside this repository
+
+### 3.2 Controller flags
+
+Before cleanup, several scripts exposed `osc` and DiffIK as peer controller choices.
+
+After cleanup:
+- DiffIK is the active implementation
+- `osc` may still appear in some CLIs, but only as a compatibility alias
+
+### 3.3 Root shell entry points
+
+Before cleanup, substantive shell scripts lived directly at the repository root.
+
+After cleanup:
+- the real script files live under `scripts/`
+- the root names are compatibility links only
+
+## 4. Recommended replacements
 
 Use these replacements for removed workflows:
-- feature extraction: store raw images instead of bundled encoder outputs
-- `rolf` training: use the maintained offline IQL scripts if they match your workflow
-- legacy training entrypoint: follow the documented scripts in `docs/user-guide.md`
+- offline RL code: keep it in a separate repository or optional integration
+- vendored wheel installs: install `dt-apriltags` from package management during environment setup
+- historical root shell paths: prefer the real files under `scripts/`

@@ -1,7 +1,9 @@
 # TODO
 
-- change fixed SAPIEN GPU limit config into configs dependent on the number of env (Furniture-Bench Part)
+Current cleanup-adjacent backlog:
 
-- removal of unused repo
-
-- format dependencies
+- review whether `ManiSkill/` should remain vendored
+- review whether `SAPIEN/` should remain vendored
+- evaluate whether `assets/` and `assets_no_tags/` can be consolidated
+- continue expanding type annotations deeper inside `furniture_bench/`
+- add stronger runtime smoke tests beyond `--help` and syntax checks

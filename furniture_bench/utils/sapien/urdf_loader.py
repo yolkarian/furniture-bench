@@ -15,11 +15,15 @@ from .actor_builder import ActorBuilder
 from .urchin import URDF, Link, Joint, Collision
 
 
-def _try_very_hard_to_find_file(filename:str, urdf_dir:str, package_dir:Optional[str]=None):
-    urdf_dir:Path = Path(urdf_dir).absolute()
-    package_dir:Path = Path(package_dir).absolute() if package_dir is not None else None
+def _try_very_hard_to_find_file(
+    filename: str, urdf_dir: str, package_dir: Optional[str] = None
+):
+    urdf_dir: Path = Path(urdf_dir).absolute()
+    package_dir: Path = (
+        Path(package_dir).absolute() if package_dir is not None else None
+    )
 
-    fpath:Optional[Path] = None
+    fpath: Optional[Path] = None
     if filename.startswith("package://"):
         filename = filename[10:]
         if package_dir is not None:
@@ -49,7 +53,7 @@ class URDFLoader:
         self.fix_root_link = True
         self.load_multiple_collisions_from_file = False
         self.load_nonconvex_collisions_from_file = False
-        self.multiple_collisions_decomposition:Literal["none", "coacd"] = "none"
+        self.multiple_collisions_decomposition: Literal["none", "coacd"] = "none"
         self.multiple_collisions_decomposition_params = dict()
 
         self.collision_is_visual = False
@@ -117,11 +121,11 @@ class URDFLoader:
     def set_link_density(self, link_name, density):
         self._link_density[link_name] = density
 
-    def set_scene(self, scene:Scene):
+    def set_scene(self, scene: Scene):
         self.scene = scene
         return self
 
-    def parse_srdf(self, srdf_string:str):
+    def parse_srdf(self, srdf_string: str):
         ignore_pairs = []
         root = ET.fromstring(srdf_string.encode("utf-8"))
         for elem in root.findall("disable_collisions"):
@@ -135,7 +139,7 @@ class URDFLoader:
         return Pose(origin)
 
     def _parse_cameras(self, extra):
-        cameras:List[dict] = []
+        cameras: List[dict] = []
 
         sensors = []
         for gazebo in extra.findall("gazebo"):
@@ -243,7 +247,7 @@ class URDFLoader:
 
         return cameras
 
-    def _config_link_builder(self, link:Link, link_builder:ActorBuilder):
+    def _config_link_builder(self, link: Link, link_builder: ActorBuilder):
         # inertial
         if (
             link.inertial
@@ -424,7 +428,7 @@ class URDFLoader:
                     self.package_dir,
                 )
                 if self.load_nonconvex_collisions_from_file:
-                        link_builder.add_nonconvex_collision_from_file(
+                    link_builder.add_nonconvex_collision_from_file(
                         filename,
                         t_collision2link,
                         scale * self.scale,
@@ -463,11 +467,11 @@ class URDFLoader:
                         scale * self.scale,
                     )
 
-    def _parse_articulation(self, root, fix_base:bool):
+    def _parse_articulation(self, root, fix_base: bool):
         builder = ArticulationBuilder()  # without setting the scene instead
         stack = [root]
 
-        link2builder:Dict[str, LinkBuilder] = dict()
+        link2builder: Dict[str, LinkBuilder] = dict()
         while stack:
             link_name = stack.pop()
             link = self.name2link[link_name]
@@ -537,7 +541,7 @@ class URDFLoader:
                         t_axis2joint,
                         friction,
                         damping,
-                        effort_limit=joint.limit.effort
+                        effort_limit=joint.limit.effort,
                     )
                 elif joint.joint_type == "continuous":
                     link_builder.set_joint_properties(
@@ -562,7 +566,7 @@ class URDFLoader:
                         t_axis2joint,
                         friction,
                         damping,
-                        effort_limit=joint.limit.effort
+                        effort_limit=joint.limit.effort,
                     )
                 elif joint.joint_type == "fixed":
                     link_builder.set_joint_properties(
@@ -616,7 +620,7 @@ class URDFLoader:
 
         return builder
 
-    def _parse_actor(self, link_name:str):
+    def _parse_actor(self, link_name: str):
         builder = ActorBuilder()
         builder.set_name(link_name)
         self._config_link_builder(self.name2link[link_name], builder)
@@ -630,28 +634,32 @@ class URDFLoader:
 
         return builder
 
-    def _parse_urdf(self, urdf_string:str)->Tuple[List[ArticulationBuilder], List[ActorBuilder], List[dict]]:
+    def _parse_urdf(
+        self, urdf_string: str
+    ) -> Tuple[List[ArticulationBuilder], List[ActorBuilder], List[dict]]:
         xml = ET.fromstring(urdf_string.encode("utf-8"))
 
         robot = URDF._from_xml(xml, self.urdf_dir, lazy_load_meshes=True)
         links = robot.links
         joints = robot.joints
 
-        self.name2link:Dict[str, Link] = dict(zip([link.name for link in links], links))
+        self.name2link: Dict[str, Link] = dict(
+            zip([link.name for link in links], links)
+        )
 
-        self.link2child_joints:Dict[str, List[Joint]] = dict()
+        self.link2child_joints: Dict[str, List[Joint]] = dict()
         for l in links:
             self.link2child_joints[l.name] = []
         for joint in joints:
             self.link2child_joints[joint.parent].append(joint)
 
-        self.link2parent_joint:Dict[str,Joint] = dict()
+        self.link2parent_joint: Dict[str, Joint] = dict()
         for joint in joints:
             self.link2parent_joint[joint.child] = joint
         self.link2parent_joint[robot.base_link.name] = None
 
         roots = [robot.base_link.name]
-        # exclude floating joints and treat them as special 
+        # exclude floating joints and treat them as special
         for joint in joints:
             if joint.joint_type == "floating":
                 if joint.parent != robot.base_link.name:
@@ -663,15 +671,15 @@ class URDFLoader:
                     j for j in self.link2child_joints[joint.parent] if j != joint
                 ]
 
-        actor_builders:List[ActorBuilder] = []
-        articulation_builders:List[ArticulationBuilder] = []
+        actor_builders: List[ActorBuilder] = []
+        articulation_builders: List[ArticulationBuilder] = []
         for root in roots:
             if len(self.link2child_joints[root]) == 0:
                 actor_builder = self._parse_actor(root)
                 # NOTE(Yuke): to optimize performance, static/kinematic Actor is better but pose
-                #           change after loading and building default 
+                #           change after loading and building default
                 if root == robot.base_link.name:
-                    if self.fix_root_link: # fix_root_actor kinematic Actor 
+                    if self.fix_root_link:  # fix_root_actor kinematic Actor
                         actor_builder.set_physx_body_type("kinematic")
                 actor_builders.append(actor_builder)
             else:
@@ -687,7 +695,9 @@ class URDFLoader:
 
         return articulation_builders, actor_builders, cameras
 
-    def parse(self, urdf_file, srdf_file=None, package_dir=None)->Tuple[List[ArticulationBuilder], List[ActorBuilder], List[dict]]:
+    def parse(
+        self, urdf_file, srdf_file=None, package_dir=None
+    ) -> Tuple[List[ArticulationBuilder], List[ActorBuilder], List[dict]]:
         self.package_dir = package_dir
         self.urdf_dir = os.path.dirname(urdf_file)
 
@@ -708,7 +718,7 @@ class URDFLoader:
         """
         Multiple Loading means it can load either Articulation or Actor(Entity) here. When the loaded asset is an Actor, load()
         just retures empty list. Through this API, you can import actor. Either is empty.
-        
+
         Args:
             urdf_file: filename for URDL file
             srdf_file: SRDF for urdf_file. If srdf_file is None, it defaults to the ".srdf" file with the same as the urdf file
@@ -720,21 +730,21 @@ class URDFLoader:
             urdf_file, srdf_file, package_dir
         )
 
-        articulations:List[PhysxArticulation] = []
+        articulations: List[PhysxArticulation] = []
         for b in articulation_builders:
             b_scene = self.scene
             b.set_scene(self.scene)
             articulations.append(b.build())
             b.set_scene(b_scene)
 
-        actors:List[Entity] = []
+        actors: List[Entity] = []
         for b in actor_builders:
             b_scene = self.scene
             b.set_scene(self.scene)
             actors.append(b.build())
             b.set_scene(b_scene)
 
-        name2entity:Dict[str, Entity] = dict()
+        name2entity: Dict[str, Entity] = dict()
         for a in articulations:
             for l in a.links:
                 name2entity[l.name] = l.entity
@@ -781,21 +791,21 @@ class URDFLoader:
                 "URDF contains multiple objects, call load_multiple instead"
             )
 
-        articulations:List[PhysxArticulation] = []
+        articulations: List[PhysxArticulation] = []
         for b in articulation_builders:
             b_scene = self.scene
             b.set_scene(self.scene)
             articulations.append(b.build())
             b.set_scene(b_scene)
 
-        actors:List[Entity] = []
+        actors: List[Entity] = []
         for b in actor_builders:
             b_scene = self.scene
             b.set_scene(self.scene)
             actors.append(b.build())
             b.set_scene(b_scene)
 
-        name2entity:Dict[str, Entity] = dict()
+        name2entity: Dict[str, Entity] = dict()
         for a in articulations:
             for l in a.links:
                 name2entity[l.name] = l.entity

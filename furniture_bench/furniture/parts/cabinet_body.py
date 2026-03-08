@@ -5,7 +5,7 @@ import numpy.typing as npt
 from furniture_bench.utils.pose import get_mat, is_similar_pos, is_similar_rot, rot_mat
 from furniture_bench.furniture.parts.part import Part
 import furniture_bench.utils.transform as T
-import furniture_bench.controllers.control_utils as C
+import furniture_bench.utils.control as C
 from furniture_bench.config import config
 
 
@@ -29,7 +29,7 @@ class CabinetBody(Part):
 
         self.reset_x_len = 0.1175
         self.reset_y_len = 0.15
-        
+
         self.half_height = 0.0685
         self.half_length = 0.05875
 
@@ -43,7 +43,7 @@ class CabinetBody(Part):
         self.pre_assemble_done = False
 
         self.body_grip_width = 0.01
-        
+
         self.skill_complete_next_states = [
             "push",
             "go_up",
@@ -53,7 +53,7 @@ class CabinetBody(Part):
         self.pre_assemble_done = False
         self._state = "reach_body_grasp_xy"
         self.gripper_action = -1
-        
+
     def pre_assemble(
         self,
         ee_pos,
@@ -126,7 +126,7 @@ class CabinetBody(Part):
                 target_pos[0] = max(obstacle_pos[0], target_pos[0])
                 target_pos[1] = max(obstacle_pos[1], target_pos[1])
             target_pos = april_to_robot @ sim_to_april_mat @ target_pos
-            target_pos[0] -= (self.half_length * 2 + 0.04) # Margin 4cm
+            target_pos[0] -= self.half_length * 2 + 0.04  # Margin 4cm
             target_pos[1] -= self.half_length
             # Margin
             # target_pos[0] -= 0.02
@@ -157,7 +157,7 @@ class CabinetBody(Part):
             if self.gripper_greater(
                 gripper_width,
                 config["robot"]["max_gripper_width"]["square_table"] - 0.001,
-                cnt_max=20
+                cnt_max=20,
             ):
                 next_state = "go_up"
         if self._state == "go_up":
@@ -174,12 +174,12 @@ class CabinetBody(Part):
             self.gripper_action = -1
             self.pre_assemble_done = True
             target = self.prev_pose
-        
+
         skill_complete = self.may_transit_state(next_state)
 
         return (
             target[:3, 3],
             C.mat2quat(target[:3, :3]),
             torch.tensor([self.gripper_action]).to(ee_pos.device),
-            skill_complete
+            skill_complete,
         )

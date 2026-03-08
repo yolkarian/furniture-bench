@@ -14,7 +14,7 @@ from furniture_bench.utils.sapien import (
     set_metalic_material,
     set_plastic_material,
     set_rough_material,
-    rand_material
+    rand_material,
 )
 import math
 from furniture_bench.utils.sapien.camera import (
@@ -36,7 +36,7 @@ import torch
 import gymnasium as gym
 
 import furniture_bench.utils.transform as T
-import furniture_bench.controllers.control_utils as C
+import furniture_bench.utils.control as C
 from furniture_bench.envs.initialization_mode import Randomness, str_to_enum
 from furniture_bench.controllers.diffik import diffik_factory
 
@@ -67,7 +67,6 @@ from furniture_bench.sim_config import (
 from furniture_bench.utils.sapien.actor_builder import ActorBuilder
 from furniture_bench.utils.sapien.articulation_builder import ArticulationBuilder
 
-
 ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets_no_tags")
 
 # TODO:
@@ -97,7 +96,7 @@ class FurnitureSimRLEnv(gym.Env):
         init_assembled: bool = False,
         enable_sensor: bool = True,
         action_type: Literal["delta", "pos"] = "delta",
-        ctrl_mode: Literal["diffik"] = "diffik",
+        ctrl_mode: Literal["diffik", "osc"] = "diffik",
         parallel_in_single_scene: bool = False,
         manual_done: bool = False,
         camera_shader: Optional[Literal["default", "minimal", "rt"]] = None,
@@ -109,9 +108,9 @@ class FurnitureSimRLEnv(gym.Env):
         april_tags: bool = False,
         perturbation_prob: float = 0.01,
         concat_robot_state: bool = False,
-        channel_first:bool = False, # TODO: to implement, by default it is not channel_first
+        channel_first: bool = False,  # TODO: to implement, by default it is not channel_first
         high_random_idx: int = 0,
-        resize_img:bool = True,
+        resize_img: bool = True,
         **kwargs: dict,  # dict which is used to catch extra params
     ):
         self.furniture_name = furniture
@@ -131,14 +130,16 @@ class FurnitureSimRLEnv(gym.Env):
         self.enable_sensor = enable_sensor
         self.parallel_in_single_scene = parallel_in_single_scene
         self.manual_done = manual_done
-        self.init_assembled: bool = init_assembled  # If true, the environment is initialized and reset without randomness
+        self.init_assembled: bool = (
+            init_assembled  # If true, the environment is initialized and reset without randomness
+        )
         self.concat_robot_state = concat_robot_state
         self.channel_first = channel_first
         self.camera_shader = (
             SHADER_DICT[camera_shader]
             if camera_shader is not None
             else SHADER_DICT["minimal"]
-        )  #TODO: Only allow camera rendering with ray-tracing in 1 env mode
+        )  # TODO: Only allow camera rendering with ray-tracing in 1 env mode
         self.viewer_shader = (
             SHADER_DICT[viewer_shader]
             if viewer_shader is not None
@@ -146,8 +147,9 @@ class FurnitureSimRLEnv(gym.Env):
         )
         self.record = record
 
-
-        self.ctrl_mode = ctrl_mode
+        # ``osc`` is kept as a compatibility alias so older scripts still work,
+        # but the refactored simulator only executes the DiffIK control path.
+        self.ctrl_mode = "diffik" if ctrl_mode == "osc" else ctrl_mode
         self.enable_reward = enable_reward
         if april_tags:
             global ASSET_ROOT
@@ -156,9 +158,9 @@ class FurnitureSimRLEnv(gym.Env):
         self.device = torch.device("cuda")
         self.sapien_device = sapien.Device(self.device.type)
         self.assemble_idx = 0
-        self.high_random_idx:int = high_random_idx
+        self.high_random_idx: int = high_random_idx
         self.move_neutral = False
-        # osc is not supported
+        # The simulator only supports DiffIK after the controller cleanup.
         assert self.ctrl_mode == "diffik"
 
         if self.randomness == Randomness.NONE:
@@ -308,8 +310,8 @@ class FurnitureSimRLEnv(gym.Env):
             # Adjust simulation parameters
             self.sim_params.dt = 1.0 / 120.0
             self.sim_params.substeps = 4
-            self.sim_params.gpu_memory.max_rigid_contact_count = 6553600
-            self.sim_params.gpu_memory.max_rigid_patch_count = 2**22
+            self.sim_params.gpu_memory.max_rigid_contact_count = 25600
+            self.sim_params.gpu_memory.max_rigid_patch_count = 2**14
 
             # Adjust part friction
             sim_config["parts"]["friction"] = 0.25
@@ -401,17 +403,21 @@ class FurnitureSimRLEnv(gym.Env):
                 self.obs_keys.append("color_image2")
 
             if record_dir is None:
-                record_dir = Path("sim_record") / datetime.now().strftime("%Y%m%d-%H%M%S")
+                record_dir = Path("sim_record") / datetime.now().strftime(
+                    "%Y%m%d-%H%M%S"
+                )
             else:
                 record_dir = Path(record_dir)
             record_dir.mkdir(parents=True, exist_ok=True)
-            self.recorder = VideoRecorder(  # NOTE: recorder only records the video of the first env
-                record_dir / "video.mp4",
-                fps=30,
-                width=self.img_size[1] * 2,
-                height=self.img_size[0],
-                channel_first=self.channel_first,
+            self.recorder = (
+                VideoRecorder(  # NOTE: recorder only records the video of the first env
+                    record_dir / "video.mp4",
+                    fps=30,
+                    width=self.img_size[1] * 2,
+                    height=self.img_size[0],
+                    channel_first=self.channel_first,
                 )
+            )
 
         # %% General Setup of Simulator
         sim_params: SimParams = self.sim_params
@@ -443,9 +449,11 @@ class FurnitureSimRLEnv(gym.Env):
 
         self.physx_system = sapien.physx.PhysxGpuSystem(self.sapien_device)
         self.urdf_loader = URDFLoader()  # just used to generate builder
-        self.render_system_group: Optional[Union[sapien.render.RenderSystemGroup, sapien.render.RenderSystem]] = None
+        self.render_system_group: Optional[
+            Union[sapien.render.RenderSystemGroup, sapien.render.RenderSystem]
+        ] = None
         # Simulation Step
-        self.env_steps = torch.zeros(self.num_envs, dtype=torch.int, device = self.device)
+        self.env_steps = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
 
         # %% Create builder
 
@@ -483,9 +491,7 @@ class FurnitureSimRLEnv(gym.Env):
 
         self.act_low = torch.from_numpy(self.action_space.low).to(device=self.device)
         self.act_high = torch.from_numpy(self.action_space.high).to(device=self.device)
-        self.sim_steps = math.ceil(
-            1.0 / config["robot"]["hz"] / self.sim_params.dt
-        )
+        self.sim_steps = math.ceil(1.0 / config["robot"]["hz"] / self.sim_params.dt)
         print(f"Control per {self.sim_steps} Step(s)")
 
     def _create_static_obj_builders(self):
@@ -538,7 +544,9 @@ class FurnitureSimRLEnv(gym.Env):
         self.ground_builder.add_plane_visual(
             sapien.Pose(p=[0, 0, 0], q=[0.7071068, 0, -0.7071068, 0]),
             [10, 10, 10],
-            sapien.render.RenderMaterial(base_color=[1, 1, 1, 1] , specular=0.3, roughness=0.5, metallic=0.0),
+            sapien.render.RenderMaterial(
+                base_color=[1, 1, 1, 1], specular=0.3, roughness=0.5, metallic=0.0
+            ),
             "ground_visual",
         )
 
@@ -559,9 +567,9 @@ class FurnitureSimRLEnv(gym.Env):
             # Different setting for the body and gripper
             if link_builder.name.endswith("finger"):
                 link_builder.joint_record.limits = (0, self.max_gripper_width / 2)
-                link_builder.joint_record.friction = (
-                    sim_config["robot"]["gripper_frictions"]
-                )
+                link_builder.joint_record.friction = sim_config["robot"][
+                    "gripper_frictions"
+                ]
             else:
                 link_builder.joint_record.friction = sim_config["robot"][
                     "arm_frictions"
@@ -571,8 +579,10 @@ class FurnitureSimRLEnv(gym.Env):
     def _create_part_builders(self):
         self.part_builders: Dict[str, ActorBuilder] = {}
         self.part_default_pose: Dict[str, np.ndarray] = {}
-        self.urdf_loader.load_nonconvex_collisions_from_file = True # Some meshes of parts are nonconvex
-    
+        self.urdf_loader.load_nonconvex_collisions_from_file = (
+            True  # Some meshes of parts are nonconvex
+        )
+
         for part in self.furniture.parts:
             part_builder = generate_builder_with_options_(
                 self.urdf_loader,
@@ -691,12 +701,14 @@ class FurnitureSimRLEnv(gym.Env):
                 ).set_max_depenetration_velocity(
                     sim_config["sim_params"].physx.max_depenetration_velocity
                 )
-                render_body:sapien.render.RenderBodyComponent = obj_entity.find_component_by_type( # type: ignore
+                render_body: sapien.render.RenderBodyComponent = obj_entity.find_component_by_type(  # type: ignore
                     sapien.render.RenderBodyComponent
                 )
                 if render_body:
                     for render_shape in render_body.render_shapes:
-                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                        if isinstance(
+                            render_shape, sapien.render.RenderShapeTriangleMesh
+                        ):
                             for part in render_shape.parts:
                                 set_rough_material(part.material)
                         else:
@@ -723,12 +735,14 @@ class FurnitureSimRLEnv(gym.Env):
                 ).set_max_depenetration_velocity(
                     sim_config["sim_params"].physx.max_depenetration_velocity
                 )
-                render_body:sapien.render.RenderBodyComponent = part_entity.find_component_by_type( # type: ignore
+                render_body: sapien.render.RenderBodyComponent = part_entity.find_component_by_type(  # type: ignore
                     sapien.render.RenderBodyComponent
                 )
                 if render_body:
                     for render_shape in render_body.render_shapes:
-                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                        if isinstance(
+                            render_shape, sapien.render.RenderShapeTriangleMesh
+                        ):
                             for part in render_shape.parts:
                                 set_plastic_material(part.material)
                         else:
@@ -764,16 +778,18 @@ class FurnitureSimRLEnv(gym.Env):
                 )
 
             if i == 0:
-                self.franka_qlimits = torch.from_numpy(
-                    franka_entity.get_qlimits()
-                ).to(dtype=torch.float32, device=self.device)
+                self.franka_qlimits = torch.from_numpy(franka_entity.get_qlimits()).to(
+                    dtype=torch.float32, device=self.device
+                )
                 for link in franka_entity.links:
-                    render_body:sapien.render.RenderBodyComponent = link.entity.find_component_by_type( # type: ignore
+                    render_body: sapien.render.RenderBodyComponent = link.entity.find_component_by_type(  # type: ignore
                         sapien.render.RenderBodyComponent
                     )
                     if render_body:
                         for render_shape in render_body.render_shapes:
-                            if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                            if isinstance(
+                                render_shape, sapien.render.RenderShapeTriangleMesh
+                            ):
                                 for part in render_shape.parts:
                                     set_metalic_material(part.material)
                             else:
@@ -806,7 +822,9 @@ class FurnitureSimRLEnv(gym.Env):
             for i, joint in enumerate(franka_entity.active_joints):
                 if i < 7:
                     joint.set_drive_properties(
-                        stiffness=self.stiffness, damping=self.damping, force_limit=joint.get_force_limit()
+                        stiffness=self.stiffness,
+                        damping=self.damping,
+                        force_limit=joint.get_force_limit(),
                     )
                 else:
                     pass
@@ -826,7 +844,7 @@ class FurnitureSimRLEnv(gym.Env):
                 entity = sapien.Entity()
                 entity.name = "directional_light"
                 direct_light = sapien.render.RenderDirectionalLightComponent()
-                
+
                 direct_light.set_color(light["color"])
                 direct_light.shadow = True
                 direct_light.shadow_near = -10.0
@@ -836,19 +854,25 @@ class FurnitureSimRLEnv(gym.Env):
                 light_position = np.zeros(3, dtype=np.float32)
                 entity.add_component(direct_light)
                 direct_light.set_entity_pose(
-                        sapien.Pose(
-                        light_position, sapien.math.shortest_rotation([1, 0, 0], light["direction"])
-                        )
+                    sapien.Pose(
+                        light_position,
+                        sapien.math.shortest_rotation([1, 0, 0], light["direction"]),
+                    )
                 )
                 # NOTE(Yuke): Quaternion for this pose make the vector rotate from [1,0,0] to direction following OpenGL convention.
                 # This is different from the convention in PhysX. It means the direction should be the direction in the OpenGL coordinate.
-    
+
                 scene.add_entity(entity)
                 # NOTE(Yuke): for rendering in a single scenario
                 if self.parallel_in_single_scene:
                     break
+
     # Not sure whether I can change it during the runtime
-    def rand_light(self, color_rand:Union[np.ndarray, float], direct_rand:Optional[Union[np.ndarray, float]] = None):
+    def rand_light(
+        self,
+        color_rand: Union[np.ndarray, float],
+        direct_rand: Optional[Union[np.ndarray, float]] = None,
+    ):
         for light in sim_config["lights"]:
             for scene in self.scenes:
                 ambient_light = np.array(light["ambient"], dtype=np.float32)
@@ -857,37 +881,56 @@ class FurnitureSimRLEnv(gym.Env):
                 scene.render_system.set_ambient_light(ambient_light)
             for scene in self.scenes:
                 for entity in scene.get_entities():
-                    component = entity.find_component_by_type(sapien.render.RenderDirectionalLightComponent)
+                    component = entity.find_component_by_type(
+                        sapien.render.RenderDirectionalLightComponent
+                    )
                     if component is not None:
-                        direct_light:sapien.render.RenderDirectionalLightComponent = component
-                        color = np.array(light["color"],dtype=np.float32)
+                        direct_light: sapien.render.RenderDirectionalLightComponent = (
+                            component
+                        )
+                        color = np.array(light["color"], dtype=np.float32)
                         color += color_rand * np.random.rand(3).astype(np.float32)
                         color = np.clip(color, 0, 1)
                         direct_light.set_color(color)
                         light_position = np.zeros(3, dtype=np.float32)
-                        light_direction = ( np.array(light["direction"], dtype=np.float32) +
-                                            direct_rand * np.random.rand(3).astype(np.float32)) if direct_rand is not None else (
-                                            np.array(light["direction"],dtype=np.float32) )
+                        light_direction = (
+                            (
+                                np.array(light["direction"], dtype=np.float32)
+                                + direct_rand * np.random.rand(3).astype(np.float32)
+                            )
+                            if direct_rand is not None
+                            else (np.array(light["direction"], dtype=np.float32))
+                        )
                         # NOTE: whether the pose writing operation can happen during the runtime
-                        direct_light.set_entity_pose(camera_pose_from_look_at(light_position, light_direction))
+                        direct_light.set_entity_pose(
+                            camera_pose_from_look_at(light_position, light_direction)
+                        )
                         # NOTE(Yuke): Quaternion for this pose make the vector rotate from [1,0,0] to direction following OpenGL convention.
                         # This is different from the convention in PhysX. It means the direction should be the direction in the OpenGL coordinate.
 
-    def rand_franka_rendering(self, color_rand:Union[float, np.ndarray], material_rand:Optional[Union[float, np.ndarray]] = None):
+    def rand_franka_rendering(
+        self,
+        color_rand: Union[float, np.ndarray],
+        material_rand: Optional[Union[float, np.ndarray]] = None,
+    ):
         # TODO: randomization of the material property (specular, metalic, etc)
         for franka_entity in self.franka_entities:
             for link in franka_entity.links:
-                render_body:sapien.render.RenderBodyComponent = link.entity.find_component_by_type( # type: ignore
+                render_body: sapien.render.RenderBodyComponent = link.entity.find_component_by_type(  # type: ignore
                     sapien.render.RenderBodyComponent
                 )
                 if render_body:
                     for render_shape in render_body.render_shapes:
-                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                        if isinstance(
+                            render_shape, sapien.render.RenderShapeTriangleMesh
+                        ):
                             for part in render_shape.parts:
-                                material:sapien.render.RenderMaterial = part.material
+                                material: sapien.render.RenderMaterial = part.material
                                 color = material.get_base_color()
                                 color = np.array(color, dtype=np.float32)
-                                color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                                color[:3] += color_rand * np.random.rand(3).astype(
+                                    np.float32
+                                )
                                 color = np.clip(color, 0, 1)
                                 material.set_base_color(color.tolist())
                                 if material_rand is not None:
@@ -896,26 +939,36 @@ class FurnitureSimRLEnv(gym.Env):
                             material = render_shape.material
                             color = material.get_base_color()
                             color = np.array(color, dtype=np.float32)
-                            color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                            color[:3] += color_rand * np.random.rand(3).astype(
+                                np.float32
+                            )
                             color = np.clip(color, 0, 1)
                             material.set_base_color(color.tolist())
                             if material_rand is not None:
                                 rand_material(material, material_rand)
 
-    def rand_parts_rendering(self, color_rand:Union[float, np.ndarray], material_rand:Optional[Union[float, np.ndarray]] = None):
+    def rand_parts_rendering(
+        self,
+        color_rand: Union[float, np.ndarray],
+        material_rand: Optional[Union[float, np.ndarray]] = None,
+    ):
         for key, part_entities in self.part_entities.items():
             for part_entity in part_entities:
-                render_body:sapien.render.RenderBodyComponent = part_entity.find_component_by_type( # type: ignore
+                render_body: sapien.render.RenderBodyComponent = part_entity.find_component_by_type(  # type: ignore
                     sapien.render.RenderBodyComponent
                 )
                 if render_body:
                     for render_shape in render_body.render_shapes:
-                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                        if isinstance(
+                            render_shape, sapien.render.RenderShapeTriangleMesh
+                        ):
                             for part in render_shape.parts:
-                                material:sapien.render.RenderMaterial = part.material
+                                material: sapien.render.RenderMaterial = part.material
                                 color = material.get_base_color()
                                 color = np.array(color, dtype=np.float32)
-                                color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                                color[:3] += color_rand * np.random.rand(3).astype(
+                                    np.float32
+                                )
                                 color = np.clip(color, 0, 1)
                                 material.set_base_color(color.tolist())
                                 if material_rand is not None:
@@ -925,26 +978,36 @@ class FurnitureSimRLEnv(gym.Env):
                             material = render_shape.material
                             color = material.get_base_color()
                             color = np.array(color, dtype=np.float32)
-                            color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                            color[:3] += color_rand * np.random.rand(3).astype(
+                                np.float32
+                            )
                             color = np.clip(color, 0, 1)
                             material.set_base_color(color.tolist())
                             if material_rand is not None:
                                 rand_material(material, material_rand)
 
-    def rand_obstacle_rendering(self, color_rand: Union[float, np.ndarray], material_rand:Optional[Union[float, np.ndarray]] = None):
+    def rand_obstacle_rendering(
+        self,
+        color_rand: Union[float, np.ndarray],
+        material_rand: Optional[Union[float, np.ndarray]] = None,
+    ):
         for key, static_obj_entites in self.static_obj_entites.items():
             for static_obj in static_obj_entites:
-                render_body:sapien.render.RenderBodyComponent = static_obj.find_component_by_type( # type: ignore
+                render_body: sapien.render.RenderBodyComponent = static_obj.find_component_by_type(  # type: ignore
                     sapien.render.RenderBodyComponent
                 )
                 if render_body:
                     for render_shape in render_body.render_shapes:
-                        if isinstance(render_shape, sapien.render.RenderShapeTriangleMesh):
+                        if isinstance(
+                            render_shape, sapien.render.RenderShapeTriangleMesh
+                        ):
                             for part in render_shape.parts:
-                                material:sapien.render.RenderMaterial = part.material
+                                material: sapien.render.RenderMaterial = part.material
                                 color = material.get_base_color()
                                 color = np.array(color, dtype=np.float32)
-                                color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                                color[:3] += color_rand * np.random.rand(3).astype(
+                                    np.float32
+                                )
                                 color = np.clip(color, 0, 1)
                                 material.set_base_color(color.tolist())
                                 if material_rand is not None:
@@ -953,12 +1016,13 @@ class FurnitureSimRLEnv(gym.Env):
                             material = render_shape.material
                             color = material.get_base_color()
                             color = np.array(color, dtype=np.float32)
-                            color[:3] += color_rand * np.random.rand(3).astype(np.float32)
+                            color[:3] += color_rand * np.random.rand(3).astype(
+                                np.float32
+                            )
                             color = np.clip(color, 0, 1)
                             material.set_base_color(color.tolist())
                             if material_rand is not None:
                                 rand_material(material, material_rand)
-
 
     def _load_sensors(self):
         self.sensors: Dict[str, List[sapien.render.RenderCameraComponent]] = {}
@@ -974,7 +1038,6 @@ class FurnitureSimRLEnv(gym.Env):
             cfg.near = 0.001
             cfg.far = 2.0
             cfg.fovy = np.deg2rad(40.0) if self.resize_img else np.deg2rad(69.4)
-
 
             if name == "wrist":
                 if self.resize_img:
@@ -1063,7 +1126,7 @@ class FurnitureSimRLEnv(gym.Env):
             for sensors in self.sensors.values():
                 sensors[0].take_picture()
             return
-            
+
         self.render_system_group = sapien.render.RenderSystemGroup(
             [scene.render_system for scene in self.scenes]
         )
@@ -1087,12 +1150,15 @@ class FurnitureSimRLEnv(gym.Env):
 
         if isinstance(self.render_system_group, sapien.render.RenderSystem):
             sensor_raw_obs = {
-            camera_name: {
-                picture_name: sensors[0].get_picture_cuda(picture_name).torch().clone()[None, ...]
-                for picture_name in self.sensor_keys[camera_name]
+                camera_name: {
+                    picture_name: sensors[0]
+                    .get_picture_cuda(picture_name)
+                    .torch()
+                    .clone()[None, ...]
+                    for picture_name in self.sensor_keys[camera_name]
+                }
+                for camera_name, sensors in self.sensors.items()
             }
-            for camera_name, sensors in self.sensors.items()
-        }
         else:
             sensor_raw_obs = {
                 camera_name: {
@@ -1120,7 +1186,9 @@ class FurnitureSimRLEnv(gym.Env):
                 sensor_raw_obs[camera_name][
                     self.camera_shader.obs_keys_2_texture_name[obs_key]
                 ]
-            )[obs_key]
+            )[
+                obs_key
+            ]
         return sensor_obs
 
     def _init_viewer(self):
@@ -1535,7 +1603,11 @@ class FurnitureSimRLEnv(gym.Env):
     def get_observation(self) -> dict:
         obs = {}
 
-        obs["robot_state"] = torch.cat(list(self.get_robot_state().values()), -1) if self.concat_robot_state else self.get_robot_state()
+        obs["robot_state"] = (
+            torch.cat(list(self.get_robot_state().values()), -1)
+            if self.concat_robot_state
+            else self.get_robot_state()
+        )
         if self.render_system_group is not None:
             obs.update(self.get_sensor_obs().items())
 
@@ -1706,15 +1778,15 @@ class FurnitureSimRLEnv(gym.Env):
 
     def _get_env_rigid_body_wrench_indices(self, env_idx: int) -> torch.Tensor:
         env_indices = [
-            self.parts_gpu_index_tensor[env_idx].reshape(-1).to(
-                device=self.device, dtype=torch.long
-            )
+            self.parts_gpu_index_tensor[env_idx]
+            .reshape(-1)
+            .to(device=self.device, dtype=torch.long)
         ]
         for obstacle_indices in self.obstacle_gpu_index.values():
             env_indices.append(
-                obstacle_indices[env_idx].reshape(1).to(
-                    device=self.device, dtype=torch.long
-                )
+                obstacle_indices[env_idx]
+                .reshape(1)
+                .to(device=self.device, dtype=torch.long)
             )
 
         return torch.cat(env_indices, dim=0)
@@ -1859,8 +1931,8 @@ class FurnitureSimRLEnv(gym.Env):
         # self.physx_system.gpu_apply_articulation_target_position()
         # self.physx_system.gpu_apply_articulation_target_velocity()
 
-    def set_franka(self, dof_pos:torch.Tensor):
-        self._reset_franka(dof_pos = dof_pos)
+    def set_franka(self, dof_pos: torch.Tensor):
+        self._reset_franka(dof_pos=dof_pos)
 
     def _reset_parts(
         self,
@@ -1951,13 +2023,17 @@ class FurnitureSimRLEnv(gym.Env):
                 self.obstacle_gpu_index["obstacle_right"][env_idx], :3
             ] = torch.from_numpy(
                 obstacle_pose.p + obstacle_right_offset + self.scene_offsets_np[env_idx]
-            ).to(dtype=torch.float32, device=self.device)
+            ).to(
+                dtype=torch.float32, device=self.device
+            )
 
             self.physx_system.cuda_rigid_body_data.torch()[
                 self.obstacle_gpu_index["obstacle_left"][env_idx], :3
             ] = torch.from_numpy(
                 obstacle_pose.p + obstacle_left_offset + self.scene_offsets_np[env_idx]
-            ).to(dtype=torch.float32, device=self.device)
+            ).to(
+                dtype=torch.float32, device=self.device
+            )
         else:
             self.physx_system.cuda_rigid_body_data.torch()[
                 self.obstacle_gpu_index["obstacle_front"][env_idx], :3
@@ -1987,13 +2063,12 @@ class FurnitureSimRLEnv(gym.Env):
 
     # TODO: Vectorizated reset & Quaternion Setting for Observation
     def set_parts_env(
-            self,
-            env_idx: int,
-            parts_poses: np.ndarray,
+        self,
+        env_idx: int,
+        parts_poses: np.ndarray,
     ):
         """Resets furniture parts to the initial pose.
         part_poses: quaternion xyzw"""
-
 
         for part_idx, part in enumerate(self.furnitures[env_idx].parts):
             # Use the given pose.
@@ -2066,37 +2141,41 @@ class FurnitureSimRLEnv(gym.Env):
         # Write to GPU buffer. Since obstacles are static objects, no need to reset velocity
         if self.parallel_in_single_scene:
             self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_front"][env_idx], :3
+                self.obstacle_gpu_index["obstacle_front"][env_idx], :3
             ] = torch.from_numpy(obstacle_pose.p + self.scene_offsets_np[env_idx]).to(
                 dtype=torch.float32, device=self.device
             )
 
             self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_right"][env_idx], :3
+                self.obstacle_gpu_index["obstacle_right"][env_idx], :3
             ] = torch.from_numpy(
                 obstacle_pose.p + obstacle_right_offset + self.scene_offsets_np[env_idx]
-            ).to(dtype=torch.float32, device=self.device)
+            ).to(
+                dtype=torch.float32, device=self.device
+            )
 
             self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_left"][env_idx], :3
+                self.obstacle_gpu_index["obstacle_left"][env_idx], :3
             ] = torch.from_numpy(
                 obstacle_pose.p + obstacle_left_offset + self.scene_offsets_np[env_idx]
-            ).to(dtype=torch.float32, device=self.device)
+            ).to(
+                dtype=torch.float32, device=self.device
+            )
         else:
             self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_front"][env_idx], :3
+                self.obstacle_gpu_index["obstacle_front"][env_idx], :3
             ] = torch.from_numpy(obstacle_pose.p).to(
                 dtype=torch.float32, device=self.device
             )
 
             self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_right"][env_idx], :3
+                self.obstacle_gpu_index["obstacle_right"][env_idx], :3
             ] = torch.from_numpy(obstacle_pose.p + obstacle_right_offset).to(
                 dtype=torch.float32, device=self.device
             )
 
             self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_left"][env_idx], :3
+                self.obstacle_gpu_index["obstacle_left"][env_idx], :3
             ] = torch.from_numpy(obstacle_pose.p + obstacle_left_offset).to(
                 dtype=torch.float32, device=self.device
             )
@@ -2211,8 +2290,8 @@ class FurnitureSimRLEnv(gym.Env):
                 self.max_torque_magnitude,
             )
         # episode_success: True when all pairs are assembled (not a timeout).
-        episode_success = (
-            self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble)
+        episode_success = self.already_assembled.sum(dim=1) == len(
+            self.pairs_to_assemble
         )
         return (
             obs,
@@ -2225,7 +2304,9 @@ class FurnitureSimRLEnv(gym.Env):
             },
         )
 
-    def render_only_step(self, franka_dof_pos: torch.Tensor, parts_poses:np.ndarray)->Dict[str, torch.Tensor]:
+    def render_only_step(
+        self, franka_dof_pos: torch.Tensor, parts_poses: np.ndarray
+    ) -> Dict[str, torch.Tensor]:
         """
         Set poses of all parts into the given poses and update render to obtain
         the rendered updates
@@ -2238,7 +2319,9 @@ class FurnitureSimRLEnv(gym.Env):
         """
         self.set_franka(franka_dof_pos)
         for i in range(self.num_envs):
-            self.set_parts_env(i, parts_poses[i]) # TODO: check whether to index first or afterwards
+            self.set_parts_env(
+                i, parts_poses[i]
+            )  # TODO: check whether to index first or afterwards
         self._apply_all()
         self.update_render()
         obs = self.get_observation()
@@ -2408,7 +2491,9 @@ class FurnitureSimRLEnv(gym.Env):
     def update_render(self):
         # NOTE: Only with RenderSystemGroup, GPU Render can directly access physics info from GPU
         #   Otherwise, even though render might use GPU, it needs loads physics info from CPU
-        if self.viewer is not None or (self.num_envs == 1 and self.render_system_group is not None):
+        if self.viewer is not None or (
+            self.num_envs == 1 and self.render_system_group is not None
+        ):
             self.physx_system.sync_poses_gpu_to_cpu()
         self.step_viewer()
         self.step_sensor()
@@ -2416,7 +2501,7 @@ class FurnitureSimRLEnv(gym.Env):
     # NOTE(Yuke):
     #      Update Steps for Rendering:
     #           1. step(), update_render(): Update Rendering System (Load Data from PhyxSystem to RenderSystem, Rendering)
-    #           2. take_picture(): Generate Output sensor group or sensors 
+    #           2. take_picture(): Generate Output sensor group or sensors
     #           3. get_picture_cuda(): Obtain results from buffer
 
     def step_sensor(self):
@@ -2498,14 +2583,10 @@ class FurnitureSimRLEnv(gym.Env):
 
         return rewards
 
-    
-
     def _done(self):
         if self.manual_done:
             return torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
-        assembled = (
-            self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble)
-        )
+        assembled = self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble)
         timeout = self.env_steps > self.furniture.max_env_steps
         return (assembled | timeout).unsqueeze(1)
 
@@ -2518,7 +2599,9 @@ class FurnitureSimRLEnv(gym.Env):
         total_parts = len(self.part_entities) * self.num_envs
 
         # Generate a random mask to select parts with a 1% probability
-        selected_part_mask = torch.rand(total_parts, device=self.device) < self.perturbation_prob
+        selected_part_mask = (
+            torch.rand(total_parts, device=self.device) < self.perturbation_prob
+        )
 
         # Generate random forces in the xy plane for the selected parts
         force_theta = (
@@ -2577,10 +2660,7 @@ class FurnitureSimRLEnv(gym.Env):
 
     def gripper_width(self) -> torch.Tensor:
         qpos = self.physx_system.cuda_articulation_qpos.torch()
-        return (
-            qpos[self.franka_gpu_index, 7:8]
-            + qpos[self.franka_gpu_index, 8:9]
-        )
+        return qpos[self.franka_gpu_index, 7:8] + qpos[self.franka_gpu_index, 8:9]
 
     def sim_pose_to_april_pose(self, parts_poses: torch.Tensor) -> torch.Tensor:
         part_poses_mat = C.pose2mat_batched(
@@ -2723,8 +2803,6 @@ class FurnitureSimRLEnv(gym.Env):
             self.recorder.stop_recording()
 
 
-
-
 class FurnitureSimEnv(FurnitureSimRLEnv):
     def __init__(self, *args, **kargs):
         super().__init__(*args, **kargs)
@@ -2782,7 +2860,7 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
                     env_idx, part_idx * self.pose_dim : (part_idx + 1) * self.pose_dim
                 ] = part_pose
         return parts_poses, founds
-    
+
     @torch.no_grad()
     def step(
         self, action: torch.Tensor, sample_perturbations: bool = False
@@ -2814,14 +2892,14 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
                 self.max_force_magnitude,
                 self.max_torque_magnitude,
             )
-        
+
         return (
             obs,
             reward,
             done,
             {"obs_success": True, "action_success": True},
         )
-    
+
     def _reward(self):
         """Reward is 1 if two parts are assembled."""
         rewards = torch.zeros(
@@ -2838,7 +2916,7 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
             )
 
         return rewards
-    
+
     def _done(self) -> bool:
         dones = torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
         if self.manual_done:
@@ -2850,7 +2928,8 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
                 if timeout:
                     gym.logger.warn(f"[env] env_idx: {env_idx} timeout")
         return dones
-    
+
+
 class FurnitureSimFullEnv(FurnitureSimEnv):
     """FurnitureSim environment with all available observations."""
 

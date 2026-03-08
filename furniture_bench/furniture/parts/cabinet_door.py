@@ -5,7 +5,7 @@ from furniture_bench.utils.pose import get_mat, rot_mat
 from furniture_bench.furniture.parts.part import Part
 import furniture_bench.utils.transform as T
 from furniture_bench.config import config
-import furniture_bench.controllers.control_utils as C
+import furniture_bench.utils.control as C
 
 
 class CabinetDoor(Part):
@@ -124,8 +124,8 @@ class CabinetDoor(Part):
                     device=device,
                 )
                 @ torch.tensor(
-                    get_mat([0, -0.16, 0], [0, 0, 0]), # Move with 16cm offset.
-                    device=device
+                    get_mat([0, -0.16, 0], [0, 0, 0]),  # Move with 16cm offset.
+                    device=device,
                 )
             )
             # target_door_pose_robot = torch.from_numpy(get_mat([0, np.pi, -np.pi/2], [-0.2, 0, 0])).to(device)
@@ -159,14 +159,15 @@ class CabinetDoor(Part):
             target[:3, 3] = torch.clamp(
                 target[:3, 3],
                 ee_pos - torch.tensor([0.001, 0.001, 0.001], device=device),
-                ee_pos + torch.tensor([0.010, 0.010, 0.010], device=device)
+                ee_pos + torch.tensor([0.010, 0.010, 0.010], device=device),
             )
             # Distance in x position.
             if self.satisfy(
                 ee_pose,
                 org_target,
                 max_len=300,
-                pos_error_threshold=0.0, ori_error_threshold=0.0
+                pos_error_threshold=0.0,
+                ori_error_threshold=0.0,
             ):
                 self.prev_pose = target
                 next_state = "done"

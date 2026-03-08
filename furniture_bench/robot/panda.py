@@ -8,7 +8,7 @@ import torch
 
 from furniture_bench.utils.pose import is_similar_rot, rot_mat
 from furniture_bench.config import config
-from furniture_bench.controllers.osc import osc_factory
+from furniture_bench.controllers.diffik import diffik_factory
 from furniture_bench.envs.initialization_mode import Randomness
 from furniture_bench.robot.robot_state import PandaState, PandaError
 import furniture_bench.utils.transform as T
@@ -66,21 +66,20 @@ class Panda:
         self.motion_stopped_counter = 0
 
     def init_controller(self, kp: torch.Tensor, kv: torch.Tensor):
-        """Initialize the OSC controller.
+        """Initialize the real-robot DiffIK controller.
 
         Args:
-            kp: Position gain.
-            kv: Velocity gain.
+            kp: Kept for backward-compatible call sites.
+            kv: Kept for backward-compatible call sites.
         """
+        del kp, kv
+
         ee_pos_current, ee_quat_current = self.get_ee_pose()
         ee_pos_current = torch.tensor(ee_pos_current, dtype=torch.float32)
         ee_quat_current = torch.tensor(ee_quat_current, dtype=torch.float32)
-        self.ctrl = osc_factory(
+        self.ctrl = diffik_factory(
             ee_pos_current=ee_pos_current,
             ee_quat_current=ee_quat_current,
-            init_joints=self.reset_joints,
-            kp=kp,
-            kv=kv,
             position_limits=torch.tensor(self.robot_config["position_limits"]),
         )
         self.arm.send_torch_policy(torch_policy=self.ctrl, blocking=False)

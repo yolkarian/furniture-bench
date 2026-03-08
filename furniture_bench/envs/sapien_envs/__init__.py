@@ -1,3 +1,1 @@
-from ..furniture_sim_env import FurnitureSimEnv
-
-__all__ = [FurnitureSimEnv]
+"""Legacy namespace kept for compatibility."""

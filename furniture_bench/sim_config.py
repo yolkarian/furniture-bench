@@ -30,6 +30,7 @@ sim_config["scripted_timeout"] = {
     "stool": 1_000,  # Increased from 1300
 }
 
+
 def _next_power_of_two(value: int) -> int:
     """Round a positive integer up to the next power of two."""
     if value <= 1:
@@ -41,13 +42,13 @@ def _next_power_of_two(value: int) -> int:
 class PhysxParams:
     """Low-level PhysX scene configuration."""
 
-    solver_type: int = 1   # 0 PCS 1 TGS
+    solver_type: int = 1  # 0 PCS 1 TGS
     bounce_threshold_velocity: float = 0.002
     num_position_iterations: int = 10
     num_velocity_iterations: int = 1
     rest_offset: float = 0.0
     contact_offset: float = 0.009999999776482582
-    friction_offset_threshold: float = 0.01  # These two 
+    friction_offset_threshold: float = 0.01  # These two
     friction_correlation_distance: float = 0.005
     max_depenetration_velocity: float = 10
     num_threads: int = 0
@@ -55,7 +56,7 @@ class PhysxParams:
     max_gpu_contact_pairs: int = 16055314
     default_buffer_size_multiplier: float = 8.0
 
-    # TODO: introduce params for contact control       
+    # TODO: introduce params for contact control
     # sapien.physx.set_gpu_memory_config(max_rigid_contact_count=6553600)
 
 
@@ -122,11 +123,12 @@ class SimParams:
     physx: PhysxParams = field(default_factory=PhysxParams)
     gpu_memory: GPUMemoryConfig = field(default_factory=GPUMemoryConfig)
 
+
 @dataclass
 class AssetOptions:
     """URDF loading options used while creating SAPIEN actors."""
 
-    flip_visual_attachments: bool = False # NOTE:(Yuke)
+    flip_visual_attachments: bool = False  # NOTE:(Yuke)
     fix_base_link: bool = False
     thickness: float = 0.0
     density: float = 600.0
@@ -150,6 +152,7 @@ class CameraCfg:
     fovy: float = np.deg2rad(40)
     near: float = 0.001
     far: float = 2.0
+
 
 # Simulator options.
 sim_params = SimParams()
@@ -209,6 +212,7 @@ Set density for each furniture part.
   - The volume is estimated using Belnder.
   - The mass is estimated using 3D printer slicer.
 """
+
 
 def default_asset_options() -> AssetOptions:
     """Build the default asset options shared by furniture parts."""

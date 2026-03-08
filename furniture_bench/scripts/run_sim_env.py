@@ -1,18 +1,17 @@
-"""Instantiate FurnitureSim-v0 and test various functionalities."""
+"""Instantiate a simulator environment and step it with a selected policy."""
+
+from __future__ import annotations
 
 import argparse
 import pickle
+from typing import Sequence
 
-import furniture_bench
-from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv
-
-import gymnasium as gym
-import cv2
-import torch
 import numpy as np
+import torch
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser for the simulator smoke-test script."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--furniture", default="square_table")
     parser.add_argument(
@@ -61,12 +60,11 @@ def main():
     parser.add_argument(
         "--env-id",
         default="FurnitureSim-v0",
-        help="Environment id of FurnitureSim",
+        help="Environment id of FurnitureSim.",
     )
     parser.add_argument(
         "--replay-path", type=str, help="Path to the saved data to replay action."
     )
-
     parser.add_argument(
         "--act-rot-repr",
         type=str,
@@ -74,25 +72,55 @@ def main():
         choices=["quat", "axis", "rot_6d"],
         default="quat",
     )
-
     parser.add_argument(
         "--compute-device-id",
         type=int,
         default=0,
         help="GPU device ID used for simulation.",
     )
-
     parser.add_argument(
         "--graphics-device-id",
         type=int,
         default=0,
         help="GPU device ID used for rendering.",
     )
-
     parser.add_argument("--num-envs", type=int, default=1)
-    args = parser.parse_args()
+    return parser
 
-    # Create FurnitureSim environment.
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    return build_parser().parse_args(argv)
+
+
+def action_tensor(
+    action: list[float] | np.ndarray | torch.Tensor, device: torch.device, num_envs: int
+) -> torch.Tensor:
+    """Normalize action inputs to a batched tensor on the simulator device."""
+    if isinstance(action, (list, np.ndarray)):
+        batched_action = torch.tensor(action, dtype=torch.float32, device=device)
+        if batched_action.ndim == 1:
+            batched_action = batched_action[None, :]
+        return batched_action.tile(num_envs, 1)
+
+    batched_action = action.clone()
+    if batched_action.ndim == 1:
+        batched_action = batched_action[None, :]
+    return batched_action.tile(num_envs, 1).float().to(device)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Run the simulator with teleop, replay, scripted, or no-op actions."""
+    args = parse_args(argv)
+
+    # Delay simulator imports until after argument parsing so ``--help`` stays cheap.
+    from furniture_bench.device import make_device
+    from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv
+
+    # ``env-id`` is kept for CLI compatibility even though this script directly
+    # instantiates ``FurnitureSimEnv`` like the previous implementation did.
+    _ = args.env_id
+
     env = FurnitureSimEnv(
         furniture=args.furniture,
         num_envs=args.num_envs,
@@ -108,73 +136,54 @@ def main():
         act_rot_repr=args.act_rot_repr,
         compute_device_id=args.compute_device_id,
         graphics_device_id=args.graphics_device_id,
-        april_tags = True,
+        april_tags=True,
     )
 
-    # Initialize FurnitureSim.
-    ob = env.reset()
+    env.reset()
     done = False
 
-    def action_tensor(ac):
-        if isinstance(ac, (list, np.ndarray)):
-            return torch.tensor(ac).float().to(env.device)
-
-        ac = ac.clone()
-        if len(ac.shape) == 1:
-            ac = ac[None]
-        return ac.tile(args.num_envs, 1).float().to(env.device)
-
-    # Rollout one episode with a selected policy:
     if args.input_device is not None:
-        # Teleoperation.
-        device_interface = furniture_bench.device.make(args.input_device)
-
+        # Teleoperation keeps stepping until the environment reports done.
+        device_interface = make_device(args.input_device)
         while not done:
             action, _ = device_interface.get_action()
-            action = action_tensor(action)
-            ob, rew, done, _ = env.step(action)
-
+            _, _, done, _ = env.step(action_tensor(action, env.device, args.num_envs))
     elif args.no_action or args.init_assembled:
-        # Execute 0 actions.
+        # Use the action-space neutral element to render an idle episode.
         while True:
             if args.act_rot_repr == "quat":
-                ac = action_tensor([0, 0, 0, 0, 0, 0, 1, -1])
+                action = [0, 0, 0, 0, 0, 0, 1, -1]
             else:
-                ac = action_tensor([0, 0, 0, 0, 0, 0, -1])
-            ob, rew, done, _ = env.step(ac)
+                action = [0, 0, 0, 0, 0, 0, -1]
+            env.step(action_tensor(action, env.device, args.num_envs))
     elif args.random_action:
-        # Execute randomly sampled actions.
         import tqdm
 
         pbar = tqdm.tqdm()
         while True:
-            ac = action_tensor(env.action_space.sample())
-            ob, rew, done, _ = env.step(ac)
+            sampled = env.action_space.sample()
+            env.step(action_tensor(sampled, env.device, args.num_envs))
             pbar.update(args.num_envs)
-
     elif args.file_path is not None:
-        # Play actions in the demo.
-        with open(args.file_path, "rb") as f:
-            data = pickle.load(f)
-        for ac in data["actions"]:
-            ac = action_tensor(ac)
-            env.step(ac)
+        # Replay actions stored in a demonstration pickle.
+        with open(args.file_path, "rb") as file_obj:
+            data = pickle.load(file_obj)
+        for action in data["actions"]:
+            env.step(action_tensor(action, env.device, args.num_envs))
     elif args.scripted:
-        # Execute hard-coded assembly script.
+        # Execute the hard-coded assembly policy exposed by the environment.
         while not done:
-            action, skill_complete = env.get_assembly_action()
-            action = action_tensor(action)
-            ob, rew, done, _ = env.step(action)
-    elif args.replay_path:
-        # Replay the trajectory.
-        with open(args.replay_path, "rb") as f:
-            data = pickle.load(f)
-        env.reset_to([data["observations"][0]])  # reset to the first observation.
-        for ac in data["actions"]:
-            ac = action_tensor(ac)
-            ob, rew, done, _ = env.step(ac)
+            action, _ = env.get_assembly_action()
+            _, _, done, _ = env.step(action_tensor(action, env.device, args.num_envs))
+    elif args.replay_path is not None:
+        # Restore the initial simulator state before replaying logged actions.
+        with open(args.replay_path, "rb") as file_obj:
+            data = pickle.load(file_obj)
+        env.reset_to([data["observations"][0]])
+        for action in data["actions"]:
+            _, _, done, _ = env.step(action_tensor(action, env.device, args.num_envs))
     else:
-        raise ValueError(f"No action specified")
+        raise ValueError("No action source specified.")
 
     print("done")
 

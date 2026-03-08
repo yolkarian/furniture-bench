@@ -2,7 +2,6 @@
 
 from gymnasium.envs.registration import register
 
-
 # FurnitureBench environment with full observation.
 register(
     id="FurnitureBench-v0",

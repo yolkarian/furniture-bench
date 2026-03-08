@@ -6,7 +6,7 @@ from furniture_bench.furniture.parts.part import Part
 from furniture_bench.utils.pose import get_mat, is_similar_rot, is_similar_xz, rot_mat
 from furniture_bench.config import config
 import furniture_bench.utils.transform as T
-import furniture_bench.controllers.control_utils as C
+import furniture_bench.utils.control as C
 
 
 class Leg(Part):

@@ -5,7 +5,7 @@ import numpy.typing as npt
 from furniture_bench.furniture.parts.leg import Leg
 from furniture_bench.utils.pose import get_mat, rot_mat
 from furniture_bench.config import config
-import furniture_bench.controllers.control_utils as C
+import furniture_bench.utils.control as C
 import furniture_bench.utils.transform as T
 
 
@@ -242,7 +242,11 @@ class LampBulb(Leg):
             target = rel @ ee_pose
             target[2] += 0.03  # Margin.
             if self.satisfy(
-                ee_pose, target, pos_error_threshold=0.000, ori_error_threshold=0.0, max_len=30
+                ee_pose,
+                target,
+                pos_error_threshold=0.000,
+                ori_error_threshold=0.0,
+                max_len=30,
             ):
                 self.prev_pose = target
                 next_state = "insert_wait"

@@ -1,20 +1,39 @@
-# Refactored FurnitureBench Documentation
+# Documentation Index
 
-This documentation describes the supported workflows of the refactored repository.
+This documentation covers the **project-owned** parts of the cleaned-up repository.
+
+It focuses on:
+- the `furniture_bench` package
+- maintained Python entry points under `furniture_bench/scripts/`
+- maintained top-level helpers under `scripts/`
+- repository cleanup and compatibility behavior
+
+It does **not** attempt to rewrite the vendored upstream documentation under:
+- `ManiSkill/`
+- `SAPIEN/`
 
 ## Document map
 
-- [User guide](user-guide.md): installation, simulator usage, data collection, replay, and offline training.
-- [Developer guide](developer-guide.md): package structure, dynamic GPU-memory sizing, and refactor boundaries.
-- [Migration notes](migration.md): removed legacy modules and the new supported replacements.
+- [User guide](user-guide.md)
+  - installation
+  - simulator usage
+  - data collection
+  - replay
+  - dataset download and preprocessing
 
-## Repository boundaries
+- [Developer guide](developer-guide.md)
+  - package boundaries
+  - controller cleanup
+  - script conventions
+  - typing / formatting expectations
+  - verification approach
 
-The refactor intentionally focuses on:
-- `furniture_bench`
-- scripts that directly use `furniture_bench`
-- the offline `implicit_q_learning` workflow that still operates on raw observations
+- [Migration notes](migration.md)
+  - removed directories and modules
+  - shell-script relocation
+  - compatibility aliases
+  - recommended replacements for removed workflows
 
-The following folders were intentionally left untouched and can be used as local implementation references only:
-- `SAPIEN/`
-- `ManiSkill/`
+- [Repository structure](../STRUCTURE.md)
+  - current top-level layout
+  - core vs supporting vs reference-only areas

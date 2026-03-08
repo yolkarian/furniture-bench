@@ -1,78 +1,91 @@
 # Developer Guide
 
-## 1. Refactor goals
+## 1. Cleanup goals
 
-This refactor was designed to make the project smaller, clearer, and easier to maintain.
+This repository cleanup was designed to make the project smaller, clearer, and easier to maintain.
 
-The core changes are:
-- keep the project centered on `furniture_bench`
-- remove bundled visual-encoder stacks (`r3m`, `vip`) and the legacy `rolf` training package
-- remove simulator-side encoder environments
-- document the supported workflows in English
-- improve type annotations and comments in the touched Python entry points
+The main changes were:
+- keep the repository centered on `furniture_bench`
+- remove the bundled offline RL / IQL stack
+- remove vendored wheel artifacts and the unused top-level `config/` directory
+- keep only the DiffIK controller path
+- move substantive shell scripts into `scripts/`
+- improve formatting, typing, and inline comments in maintained entry points
 
-## 2. Package layout
+## 2. Project boundaries
+
+The maintained project surface is:
+- `furniture_bench/`
+- `scripts/`
+- `docs/`
+
+The vendored trees are still present mainly as local references:
+- `ManiSkill/`
+- `SAPIEN/`
+
+Those reference trees are not the primary editable target of this repository.
+
+## 3. Package layout
 
 The main package areas are:
 - `furniture_bench/envs`: simulator and real-world environments
 - `furniture_bench/data`: data-collection helpers
-- `furniture_bench/scripts`: supported command-line entry points under the package
-- `furniture_bench/utils`: shared utilities
+- `furniture_bench/device`: keyboard, Oculus, and SpaceMouse-related interfaces
+- `furniture_bench/furniture`: task definitions and part logic
+- `furniture_bench/robot`: real-robot helpers
+- `furniture_bench/scripts`: maintained Python CLI entry points
+- `furniture_bench/utils`: shared utilities, including control math
 
-The refactor intentionally did not modify:
-- `SAPIEN/`
-- `ManiSkill/`
+## 4. Controller policy after cleanup
 
-These folders are present to help developers inspect API usage and implementation patterns while working on `furniture_bench`.
+Only the DiffIK controller path remains maintained.
 
-## 3. Dynamic GPU memory sizing
+Compatibility details:
+- the simulator normalizes `osc` flags to DiffIK so old script usage does not immediately break
+- `Panda` now initializes the DiffIK controller family on the real-robot side as well
+- control math helpers moved from `furniture_bench/controllers/control_utils.py` to `furniture_bench/utils/control.py`
 
-`GPUMemoryConfig` is now dynamic.
-
-Implementation details:
-- base capacities remain defined in `furniture_bench/sim_config.py`
-- the config now exposes `scale_for_envs(num_envs)`
-- each capacity is scaled linearly with `num_envs`
-- scaled capacities are rounded up to the next power of two
-- `FurnitureSimRLEnv` creates a per-instance simulator config instead of mutating the module-level config in place
-
-This design avoids two previous problems:
-- fixed GPU allocations that were too small for larger vectorized runs
-- accidental cross-run state leakage caused by mutating a shared global simulator config
-
-## 4. Observation policy after the refactor
-
-Supported observation families:
-- `state`
-- `full`
-- `image`
-
-Unsupported observation family:
-- `feature`
-
-This means:
-- no bundled encoder-backed Gym registrations
-- no simulator-side feature extraction environments
-- no data-collection path that serializes encoder outputs as the canonical format
+Practical implication:
+- new work should target DiffIK directly
+- `osc` should be treated as a transitional compatibility flag, not as an active controller implementation
 
 ## 5. Script policy
 
-The project now treats scripts in three groups:
-- supported: simulator, replay, data collection, offline IQL train/eval
-- legacy but documented: `run.py` now explains that the old `rolf` entry point was removed
-- removed: encoder-only and fine-tuning scripts that depended on the deleted legacy stack
+The repository now uses three script layers:
+- maintained Python entry points under `furniture_bench/scripts/`
+- maintained top-level helpers under `scripts/`
+- root-level compatibility symlinks for historical shell command paths
 
-## 6. Typing and comments
+The maintained Python scripts were updated to:
+- parse arguments before importing heavy simulator or hardware dependencies
+- keep public CLI flags stable where practical
+- add explicit type annotations to entry points and helpers
+- include inline comments around behavior-critical logic
 
-For touched Python files, the refactor follows these rules:
-- add explicit return types for entry points and utility helpers where practical
-- use narrow literal types for public script options when the supported values are fixed
-- place short comments above important behavior blocks rather than relying on historical context
+## 6. Formatting and typing expectations
 
-## 7. Extending the project safely
+Current expectations for maintained code:
+- use consistent formatting
+- prefer explicit type annotations on public functions and entry points
+- document non-obvious behavior inline near the logic it explains
+- preserve CLI compatibility when reorganizing script internals
 
-When adding new functionality:
-- keep new integrations optional and modular
-- avoid mutating module-level simulator config objects in environment constructors
-- prefer raw observations over bundled pretrained encoders unless there is a strong project-level reason
-- keep docs in `docs/` updated at the same time as code changes
+## 7. Dynamic GPU memory sizing
+
+`GPUMemoryConfig` remains dynamic.
+
+Implementation details:
+- base capacities remain defined in `furniture_bench/sim_config.py`
+- capacities scale from `num_envs`
+- scaled capacities are rounded up to the next power of two
+- simulator config is instantiated per environment rather than patched globally in-place
+
+## 8. Verification approach
+
+After cleanup, the maintained scripts are verified mainly by:
+- Python syntax compilation
+- `--help` checks for maintained Python CLIs
+- shell syntax checks for maintained bash entry points
+- targeted runtime smoke tests for important simulator paths
+
+This does not replace full hardware or end-to-end integration testing, but it is the baseline validation used during repository cleanup.
