@@ -187,14 +187,12 @@ Common options:
 
 ## 9. Shell helpers
 
-The maintained top-level helper scripts now live under `scripts/`:
+The maintained top-level helper scripts live under `scripts/`:
 - `scripts/install_model_deps.sh`
 - `scripts/entrypoint.sh`
 - `scripts/launch_client.sh`
 - `scripts/launch_server.sh`
 - `scripts/launch_daemon.sh`
-
-The repository root still contains compatibility symlinks with the old names.
 
 ## 10. Removed workflows
 

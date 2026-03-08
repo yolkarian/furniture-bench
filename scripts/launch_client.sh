@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-# Preserve the original CLI contract:
-#   ./launch_client.sh --gpu --built
-#   ./launch_client.sh --cpu --pulled
-#   ./launch_client.sh --sim-gpu --built
+# Expected CLI usage:
+#   bash scripts/launch_client.sh --gpu --built
+#   bash scripts/launch_client.sh --cpu --pulled
+#   bash scripts/launch_client.sh --sim-gpu --built
 mode="${1:-}"
 source_kind="${2:-}"
 

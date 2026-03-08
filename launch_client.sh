@@ -1,1 +1,0 @@
-scripts/launch_client.sh

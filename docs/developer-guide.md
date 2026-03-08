@@ -51,10 +51,9 @@ Practical implication:
 
 ## 5. Script policy
 
-The repository now uses three script layers:
+The repository now uses two maintained script layers:
 - maintained Python entry points under `furniture_bench/scripts/`
 - maintained top-level helpers under `scripts/`
-- root-level compatibility symlinks for historical shell command paths
 
 The maintained Python scripts were updated to:
 - parse arguments before importing heavy simulator or hardware dependencies

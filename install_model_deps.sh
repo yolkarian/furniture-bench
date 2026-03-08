@@ -1,1 +1,0 @@
-scripts/install_model_deps.sh

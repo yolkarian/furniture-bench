@@ -100,7 +100,7 @@ python -m furniture_bench.scripts.preprocess_data \
 - DiffIK is now the only maintained controller path.
 - Some CLI flags still accept `osc` as a **compatibility alias** and internally map it to DiffIK.
 - Top-level shell scripts were moved into `scripts/`.
-- Historical root shell command paths still work through compatibility symlinks.
+- The repository root no longer contains duplicated shell entry-point files.
 - `SAPIEN/` and `ManiSkill/` are still present as local reference trees, but they are not the primary editable target of this repository.
 
 ## Documentation
@@ -114,4 +114,4 @@ python -m furniture_bench.scripts.preprocess_data \
 ## Notes
 
 - The maintained docs in this repository describe the project-owned code and workflows. Vendored third-party trees keep their own upstream documentation.
-- For shell helpers, prefer the real files under `scripts/`; the root-level shell files are compatibility links.
+- Use the shell helpers directly from `scripts/`.

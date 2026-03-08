@@ -23,7 +23,7 @@ The substantive shell scripts now live under `scripts/`:
 - `scripts/launch_server.sh`
 - `scripts/launch_daemon.sh`
 
-Compatibility symlinks remain in the repository root so older command paths still resolve.
+The old duplicated shell files were removed from the repository root.
 
 ### 2.2 Controller cleanup
 
@@ -64,12 +64,12 @@ After cleanup:
 Before cleanup, substantive shell scripts lived directly at the repository root.
 
 After cleanup:
-- the real script files live under `scripts/`
-- the root names are compatibility links only
+- the maintained script files live under `scripts/`
+- the old root-level copies were removed
 
 ## 4. Recommended replacements
 
 Use these replacements for removed workflows:
 - offline RL code: keep it in a separate repository or optional integration
 - vendored wheel installs: install `dt-apriltags` from package management during environment setup
-- historical root shell paths: prefer the real files under `scripts/`
+- historical shell helpers: call the maintained files under `scripts/`
