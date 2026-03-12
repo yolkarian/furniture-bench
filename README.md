@@ -21,7 +21,7 @@ The repository no longer bundles:
 ### 1. Install
 
 Python requirement:
-- Python `>=3.8,<3.11`
+- Python `>=3.9,<3.11`
 
 Install the package directly:
 
@@ -107,7 +107,7 @@ python -m furniture_bench.scripts.preprocess_data \
 
 - [Documentation index](docs/README.md)
 - [User guide](docs/user-guide.md)
-- [Developer guide](docs/developer-guide.md)
+- [Development rules](AGENTS.md)
 - [Migration notes](docs/migration.md)
 - [Repository structure](STRUCTURE.md)
 

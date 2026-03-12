@@ -1,14 +1,18 @@
-"""Define the types of robot state"""
+"""Define the types of robot state."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
+import numpy.typing as npt
 
+from furniture_bench.data.trajectory_types import ArrayLike, RobotStateDict
 from ipdb import set_trace as bp
 
 # List of robot state we are going to use during training and testing.
-ROBOT_STATES = [
+ROBOT_STATES: list[str] = [
     "ee_pos",
     "ee_quat",
     "ee_pos_vel",
@@ -16,7 +20,7 @@ ROBOT_STATES = [
     "gripper_width",
 ]
 
-ROBOT_STATE_DIMS = {
+ROBOT_STATE_DIMS: dict[str, int] = {
     "ee_pos": 3,
     "ee_quat": 4,
     "ee_pos_vel": 3,
@@ -30,15 +34,18 @@ ROBOT_STATE_DIMS = {
 }
 
 
-def filter_and_concat_robot_state(robot_state):
-    current_robot_state = []
+def filter_and_concat_robot_state(robot_state: RobotStateDict) -> ArrayLike:
+    current_robot_state: list[ArrayLike] = []
     for rs in ROBOT_STATES:
         if rs not in robot_state:
             continue
 
+        value = robot_state[rs]
         if rs == "gripper_width":
-            robot_state[rs] = np.array([robot_state[rs]]).reshape(1)
-        current_robot_state.append(robot_state[rs])
+            value = np.asarray([value]).reshape(1)
+        else:
+            value = np.asarray(value)
+        current_robot_state.append(value)
     return np.concatenate(current_robot_state, axis=-1)
 
 
@@ -46,14 +53,14 @@ def filter_and_concat_robot_state(robot_state):
 class PandaState:
     """Define state of Panda arm and end-effector."""
 
-    ee_pos: np.ndarray
-    ee_quat: np.ndarray
-    ee_pos_vel: np.ndarray
-    ee_ori_vel: np.ndarray
-    joint_positions: np.ndarray
-    joint_velocities: np.ndarray
-    joint_torques: np.ndarray
-    gripper_width: np.ndarray
+    ee_pos: npt.NDArray[np.float64]
+    ee_quat: npt.NDArray[np.float64]
+    ee_pos_vel: npt.NDArray[np.float64]
+    ee_ori_vel: npt.NDArray[np.float64]
+    joint_positions: npt.NDArray[np.float64]
+    joint_velocities: npt.NDArray[np.float64]
+    joint_torques: npt.NDArray[np.float64]
+    gripper_width: npt.NDArray[np.float64]
 
 
 class PandaError(Enum):

@@ -7,10 +7,12 @@ import pickle
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, cast
 
 import cv2
 import numpy as np
+
+from furniture_bench.data.trajectory_types import ObservationDict, TrajectoryDict
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +95,25 @@ def colorize_depth(
     return cv2.resize(colored, target_shape)
 
 
+def resolve_display_images(
+    observation: ObservationDict, channel_first: bool
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the two display images used by the maintained viewer."""
+    if "color_image1" in observation:
+        color_image1 = observation["color_image1"]
+        color_image2 = observation["color_image2"]
+    else:
+        # Converted datasets may keep the image tensors under alternative keys.
+        color_image1 = observation["image1"]
+        color_image2 = observation["image2"]
+
+    if channel_first:
+        color_image1 = np.moveaxis(color_image1, 0, -1)
+        color_image2 = np.moveaxis(color_image2, 0, -1)
+
+    return color_image1, color_image2
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Render a stored trajectory in an OpenCV window."""
     np.set_printoptions(suppress=True)
@@ -113,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
 
     with open(pickle_path, "rb") as file_obj:
-        data = pickle.load(file_obj)
+        data = cast(TrajectoryDict, pickle.load(file_obj))
 
     trajectory_length = len(data["actions"])
     rewards: list[float] = []
@@ -125,18 +146,10 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     for step_idx in range(trajectory_length):
         observation = data["observations"][step_idx]
-
-        if "color_image1" in data["observations"][0]:
-            color_image1 = observation["color_image1"]
-            color_image2 = observation["color_image2"]
-        else:
-            # Converted datasets may keep the image tensors under alternative keys.
-            color_image1 = observation["image1"]
-            color_image2 = observation["image2"]
-
-        if args.channel_first:
-            color_image1 = np.moveaxis(color_image1, 0, -1)
-            color_image2 = np.moveaxis(color_image2, 0, -1)
+        color_image1, color_image2 = resolve_display_images(
+            observation,
+            channel_first=args.channel_first,
+        )
 
         color_image1 = cv2.cvtColor(color_image1, cv2.COLOR_RGB2BGR)
         color_image2 = cv2.cvtColor(color_image2, cv2.COLOR_RGB2BGR)

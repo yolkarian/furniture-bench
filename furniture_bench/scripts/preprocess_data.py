@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import pickle
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence, cast
 
 import numpy as np
+
+from furniture_bench.data.trajectory_types import TrajectoryDict
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,7 +90,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return build_parser().parse_args(argv)
 
 
-def trim_leading_noops(trajectory: dict[str, Any]) -> int:
+def trim_leading_noops(trajectory: TrajectoryDict) -> int:
     """Drop the leading neutral actions that often precede teleoperation."""
     no_action = np.array([0, 0, 0, 0, 0, 0, 1, -1], dtype=np.float32)
     num_skipped = 0
@@ -107,7 +109,7 @@ def trim_leading_noops(trajectory: dict[str, Any]) -> int:
     return num_skipped
 
 
-def truncate_when_assembled(trajectory: dict[str, Any], total_reward: float) -> int:
+def truncate_when_assembled(trajectory: TrajectoryDict, total_reward: float) -> int:
     """Stop the trajectory after the final assembly reward is observed."""
     reward_sum = 0.0
     len_traj = len(trajectory["actions"])
@@ -131,7 +133,7 @@ def truncate_when_assembled(trajectory: dict[str, Any], total_reward: float) -> 
 
 
 def truncate_skill_window(
-    trajectory: dict[str, Any],
+    trajectory: TrajectoryDict,
     from_skill: int,
     to_skill: int | None,
     skill_margin: int,
@@ -164,7 +166,7 @@ def truncate_skill_window(
     trajectory["skills"] = trajectory["skills"][start_idx:done_idx]
 
 
-def move_images_channel_first(trajectory: dict[str, Any]) -> None:
+def move_images_channel_first(trajectory: TrajectoryDict) -> None:
     """Convert RGB observations to channel-first tensors expected by training code."""
     for observation in trajectory["observations"]:
         for image_key in ["color_image1", "color_image2"]:
@@ -172,7 +174,7 @@ def move_images_channel_first(trajectory: dict[str, Any]) -> None:
 
 
 def simplify_observations(
-    trajectory: dict[str, Any], use_all_cam: bool, no_robot_state: bool
+    trajectory: TrajectoryDict, use_all_cam: bool, no_robot_state: bool
 ) -> None:
     """Keep only the observation fields needed by downstream pipelines."""
     from furniture_bench.robot.robot_state import filter_and_concat_robot_state
@@ -202,7 +204,7 @@ def simplify_observations(
             observation.pop("robot_state")
 
 
-def normalize_actions(trajectory: dict[str, Any], args: argparse.Namespace) -> None:
+def normalize_actions(trajectory: TrajectoryDict, args: argparse.Namespace) -> None:
     """Normalize position deltas into the [-1, 1] interval when requested."""
     norm_eps = 1e-5
     for index, action in enumerate(trajectory["actions"]):
@@ -239,7 +241,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         with open(file_path, "rb") as file_obj:
             try:
-                data = pickle.load(file_obj)
+                data = cast(TrajectoryDict, pickle.load(file_obj))
             except Exception:
                 print(f"Fail to load: {file_path}")
                 continue
@@ -251,7 +253,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             print(f"Skip empty trajectory: {file_path}")
             continue
 
-        new_traj: dict[str, Any] = {
+        new_traj: TrajectoryDict = {
             "furniture": data["furniture"],
             "observations": data["observations"].copy(),
             "actions": data["actions"].copy(),

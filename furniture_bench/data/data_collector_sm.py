@@ -22,6 +22,7 @@ from tqdm import tqdm
 
 from furniture_bench.config import config
 from furniture_bench.data.collect_enum import CollectEnum
+from furniture_bench.data.trajectory_types import ObservationDict, TrajectoryDict
 from furniture_bench.device.device_interface import DeviceInterface
 from furniture_bench.device.spacemouse.spacemouse_shared_memory import Spacemouse
 from furniture_bench.envs.initialization_mode import Randomness
@@ -190,7 +191,7 @@ class DataCollectorSpaceMouse:
         v = v.squeeze()
         return v
 
-    def _set_dictionary(self, to: dict[str, Any], from_: dict[str, Any]) -> None:
+    def _set_dictionary(self, to: ObservationDict, from_: dict[str, Any]) -> None:
         if self.obs_type in ["full", "image"]:
             to["color_image1"] = from_["color_image1"]
             to["color_image2"] = from_["color_image2"]
@@ -514,13 +515,15 @@ class DataCollectorSpaceMouse:
                     f"Collected {self.traj_counter} / {self.num_demos} successful trajectories!"
                 )
 
-    def save_and_reset(self, collect_enum: CollectEnum, info):
+    def save_and_reset(
+        self, collect_enum: CollectEnum, info: dict[str, Any]
+    ) -> Any:
         """Saves the collected data and reset the environment."""
         self.save(collect_enum, info)
         self.verbose_print(f"Saved {self.traj_counter} trajectories in this run.")
         return self.reset()
 
-    def reset(self):
+    def reset(self) -> Any:
         obs = self.env.reset()
         self._reset_collector_buffer()
 
@@ -535,16 +538,16 @@ class DataCollectorSpaceMouse:
         return obs
 
     def _reset_collector_buffer(self) -> None:
-        self.obs = []
-        self.org_obs = []
-        self.acts = []
-        self.rews = []
-        self.skills = []
+        self.obs: list[ObservationDict] = []
+        self.org_obs: list[dict[str, Any]] = []
+        self.acts: list[np.ndarray] = []
+        self.rews: list[float] = []
+        self.skills: list[int] = []
         self.step_counter = 0
         self.last_reward_idx = -1
-        self.skill_set = []
+        self.skill_set: list[int] = []
 
-    def save(self, collect_enum: CollectEnum, info):
+    def save(self, collect_enum: CollectEnum, info: dict[str, Any]) -> None:
         self.verbose_print(f"Length of trajectory: {len(self.obs)}")
 
         data_name = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
@@ -552,14 +555,14 @@ class DataCollectorSpaceMouse:
         demo_path.mkdir(parents=True, exist_ok=True)
 
         # Color data paths.
-        self.color_names = ["color_image1", "color_image2", "color_image3"]
-        self.color_video_names = []
+        self.color_names: list[str] = ["color_image1", "color_image2", "color_image3"]
+        self.color_video_names: list[Path] = []
         for name in self.color_names:
             self.color_video_names.append(demo_path / f"{data_name}_{name}.mp4")
 
         # Depth data paths.
-        self.depth_names = ["depth_image1", "depth_image2", "depth_image3"]
-        self.depth_paths = []
+        self.depth_names: list[str] = ["depth_image1", "depth_image2", "depth_image3"]
+        self.depth_paths: list[Path] = []
         for name in self.depth_names:
             self.depth_paths.append(demo_path / f"{data_name}_{name}")
 
@@ -567,13 +570,14 @@ class DataCollectorSpaceMouse:
         path = demo_path / f"{data_name}.pkl"
         with open(path, "wb") as f:
             # Save transitions with resized images.
-            data = {}
-            data["observations"] = self.obs
-            data["actions"] = self.acts
-            data["rewards"] = self.rews
-            data["skills"] = self.skills
-            data["success"] = True if collect_enum == CollectEnum.SUCCESS else False
-            data["furniture"] = self.furniture
+            data: TrajectoryDict = {
+                "observations": self.obs,
+                "actions": self.acts,
+                "rewards": self.rews,
+                "skills": self.skills,
+                "success": collect_enum == CollectEnum.SUCCESS,
+                "furniture": self.furniture,
+            }
 
             if "error" in info:
                 data["error_description"] = info["error"].value

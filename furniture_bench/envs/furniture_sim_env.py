@@ -26,7 +26,7 @@ from sapien.utils.viewer import Viewer
 import os
 import numpy as np
 from numpy.typing import NDArray
-from typing import Dict, Union
+from typing import Any, Dict, TypeAlias, Union
 from pathlib import Path
 from datetime import datetime
 
@@ -68,6 +68,10 @@ from furniture_bench.utils.sapien.actor_builder import ActorBuilder
 from furniture_bench.utils.sapien.articulation_builder import ArticulationBuilder
 
 ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets_no_tags")
+
+RobotStateTensorDict: TypeAlias = dict[str, torch.Tensor]
+EnvObservation: TypeAlias = dict[str, torch.Tensor | RobotStateTensorDict]
+StepInfo: TypeAlias = dict[str, bool | torch.Tensor]
 
 # TODO:
 #       Add randomness of obstacle, given that the full observations include the pose of obstacles
@@ -112,7 +116,7 @@ class FurnitureSimRLEnv(gym.Env):
         high_random_idx: int = 0,
         resize_img: bool = True,
         **kwargs: dict,  # dict which is used to catch extra params
-    ):
+    ) -> None:
         self.furniture_name = furniture
         self.task_name = furniture
         self.num_envs = num_envs
@@ -494,7 +498,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.sim_steps = math.ceil(1.0 / config["robot"]["hz"] / self.sim_params.dt)
         print(f"Control per {self.sim_steps} Step(s)")
 
-    def _create_static_obj_builders(self):
+    def _create_static_obj_builders(self) -> None:
         # Create builders for all static objs (Actorbuilder/ArticulationBuilder)
         self.static_obj_builders: Dict[str, ActorBuilder] = {}
         for key, value in self.static_obj_dict.items():
@@ -532,7 +536,7 @@ class FurnitureSimRLEnv(gym.Env):
             self.obstacle_right_pose
         )
 
-    def _create_ground_builder(self):
+    def _create_ground_builder(self) -> None:
         # Do we need to create a ground for each scene ? ()
         self.ground_builder = sapien.ActorBuilder()
         self.ground_builder.set_name("ground")
@@ -550,7 +554,7 @@ class FurnitureSimRLEnv(gym.Env):
             "ground_visual",
         )
 
-    def _create_franka_builder(self):
+    def _create_franka_builder(self) -> None:
         urdf_file = "franka_description_ros/franka_description/robots/franka_panda.urdf"
         opts = AssetOptions()
         opts.armature = 0.01
@@ -576,7 +580,7 @@ class FurnitureSimRLEnv(gym.Env):
                 ]
         self.frank_builder.set_initial_pose(self.franka_pose)
 
-    def _create_part_builders(self):
+    def _create_part_builders(self) -> None:
         self.part_builders: Dict[str, ActorBuilder] = {}
         self.part_default_pose: Dict[str, np.ndarray] = {}
         self.urdf_loader.load_nonconvex_collisions_from_file = (
@@ -617,7 +621,7 @@ class FurnitureSimRLEnv(gym.Env):
                 )
         self.urdf_loader.load_nonconvex_collisions_from_file = False
 
-    def _create_scenes(self):
+    def _create_scenes(self) -> None:
         # %% Create Scenes
         self.scenes: List[sapien.Scene] = []
         # Some info to store
@@ -836,7 +840,7 @@ class FurnitureSimRLEnv(gym.Env):
             self.device
         )
 
-    def _add_light(self):
+    def _add_light(self) -> None:
         for light in sim_config["lights"]:
             for scene in self.scenes:
                 scene.render_system.set_ambient_light(light["ambient"])
@@ -872,7 +876,7 @@ class FurnitureSimRLEnv(gym.Env):
         self,
         color_rand: Union[np.ndarray, float],
         direct_rand: Optional[Union[np.ndarray, float]] = None,
-    ):
+    ) -> None:
         for light in sim_config["lights"]:
             for scene in self.scenes:
                 ambient_light = np.array(light["ambient"], dtype=np.float32)
@@ -912,7 +916,7 @@ class FurnitureSimRLEnv(gym.Env):
         self,
         color_rand: Union[float, np.ndarray],
         material_rand: Optional[Union[float, np.ndarray]] = None,
-    ):
+    ) -> None:
         # TODO: randomization of the material property (specular, metalic, etc)
         for franka_entity in self.franka_entities:
             for link in franka_entity.links:
@@ -951,7 +955,7 @@ class FurnitureSimRLEnv(gym.Env):
         self,
         color_rand: Union[float, np.ndarray],
         material_rand: Optional[Union[float, np.ndarray]] = None,
-    ):
+    ) -> None:
         for key, part_entities in self.part_entities.items():
             for part_entity in part_entities:
                 render_body: sapien.render.RenderBodyComponent = part_entity.find_component_by_type(  # type: ignore
@@ -990,7 +994,7 @@ class FurnitureSimRLEnv(gym.Env):
         self,
         color_rand: Union[float, np.ndarray],
         material_rand: Optional[Union[float, np.ndarray]] = None,
-    ):
+    ) -> None:
         for key, static_obj_entites in self.static_obj_entites.items():
             for static_obj in static_obj_entites:
                 render_body: sapien.render.RenderBodyComponent = static_obj.find_component_by_type(  # type: ignore
@@ -1024,7 +1028,7 @@ class FurnitureSimRLEnv(gym.Env):
                             if material_rand is not None:
                                 rand_material(material, material_rand)
 
-    def _load_sensors(self):
+    def _load_sensors(self) -> None:
         self.sensors: Dict[str, List[sapien.render.RenderCameraComponent]] = {}
         self.sensor_keys: Dict[str, Set[str]] = {}
         # camera_obs = {}
@@ -1115,7 +1119,7 @@ class FurnitureSimRLEnv(gym.Env):
                     if len(self.sensors[camera_name]) <= i:
                         self.sensors[camera_name].append(create_camera(camera_name, i))
 
-    def _init_render(self):
+    def _init_render(self) -> None:
         for rb, gpu_pose_index in self._get_render_bodies():
             if rb is not None:
                 for shape in rb.render_shapes:
@@ -1191,7 +1195,7 @@ class FurnitureSimRLEnv(gym.Env):
             ]
         return sensor_obs
 
-    def _init_viewer(self):
+    def _init_viewer(self) -> None:
         # If parallel_in_one_scene is enabled, all articulations and actors will be loaded
         # in one scene and rendered in only one render system
         # If it is disabled, only one scene containing one instance of simulation will be
@@ -1422,7 +1426,9 @@ class FurnitureSimRLEnv(gym.Env):
         }
         return {key: robot_state[key] for key in self.robot_state_keys}
 
-    def get_parts_poses(self, sim_coord=False, robot_coord=False):
+    def get_parts_poses(
+        self, sim_coord: bool = False, robot_coord: bool = False
+    ) -> torch.Tensor:
         """Get furniture parts poses in the AprilTag frame.
 
         Args:
@@ -1451,7 +1457,9 @@ class FurnitureSimRLEnv(gym.Env):
 
         return parts_poses
 
-    def get_obstacle_pose(self, sim_coord=False, robot_coord=False):
+    def get_obstacle_pose(
+        self, sim_coord: bool = False, robot_coord: bool = False
+    ) -> torch.Tensor:
         obstacle_front_poses = self.physx_system.cuda_rigid_body_data.torch()[
             self.obstacle_gpu_index["obstacle_front"].unsqueeze(1), :7
         ].clone()
@@ -1600,8 +1608,8 @@ class FurnitureSimRLEnv(gym.Env):
         action = torch.concat([delta_pos, delta_quat, gripper])
         return action.unsqueeze(0), skill_complete
 
-    def get_observation(self) -> dict:
-        obs = {}
+    def get_observation(self) -> EnvObservation:
+        obs: EnvObservation = {}
 
         obs["robot_state"] = (
             torch.cat(list(self.get_robot_state().values()), -1)
@@ -1624,7 +1632,7 @@ class FurnitureSimRLEnv(gym.Env):
 
         return obs
 
-    def _init_sim(self):
+    def _init_sim(self) -> None:
         # torch seed can be added before
         self.physx_system.gpu_init()
 
@@ -1667,7 +1675,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_apply_articulation_qvel()
         self.physx_system.gpu_update_articulation_kinematics()  #  ensure all updates have been applied to the system
 
-    def _init_ctrl(self):
+    def _init_ctrl(self) -> None:
         self.step_ctrl = diffik_factory(
             real_robot=False,
             pos_scalar=self.pos_scalar,
@@ -1675,7 +1683,7 @@ class FurnitureSimRLEnv(gym.Env):
         )
         self.ctrl_started = True
 
-    def _config_franka(self):
+    def _config_franka(self) -> None:
         # Since franka is fixed. No need to reset the root Pose
         self.franka_gpu_index = torch.tensor(
             [frank_entity.get_gpu_index() for frank_entity in self.franka_entities],
@@ -1708,7 +1716,7 @@ class FurnitureSimRLEnv(gym.Env):
                 elif link.name.endswith("k_ee_link"):
                     self.end_effector_gpu_index[i] = link.get_gpu_pose_index()
 
-    def _config_parts(self):
+    def _config_parts(self) -> None:
         self.parts_gpu_index: Dict[str, torch.Tensor] = {}
         for key, value in self.part_entities.items():
             part_gpu_index = torch.tensor(
@@ -1733,7 +1741,7 @@ class FurnitureSimRLEnv(gym.Env):
             dim=0,
         ).T.to(self.device)
 
-    def reset(self, env_idxs: Optional[torch.Tensor] = None):
+    def reset(self, env_idxs: Optional[torch.Tensor] = None) -> EnvObservation:
         # print("In orignal reset")
         resetting_all = env_idxs is None
         if env_idxs is None:
@@ -1771,7 +1779,7 @@ class FurnitureSimRLEnv(gym.Env):
             self.recorder.record_frame(obs)
         return obs
 
-    def refresh(self):
+    def refresh(self) -> None:
         self.physx_system.step()
         self._fetch_all()
         self.update_render()
@@ -1791,7 +1799,7 @@ class FurnitureSimRLEnv(gym.Env):
 
         return torch.cat(env_indices, dim=0)
 
-    def _clear_rigid_body_wrenches(self, env_idx: Optional[int] = None):
+    def _clear_rigid_body_wrenches(self, env_idx: Optional[int] = None) -> None:
         if env_idx is None:
             self.physx_system.cuda_rigid_body_force.torch()[:, :] = 0
             self.physx_system.cuda_rigid_body_torque.torch()[:, :] = 0
@@ -1806,7 +1814,7 @@ class FurnitureSimRLEnv(gym.Env):
         # which can double-apply forces when this is called from reset_env() (Bug 6).
         # The explicit applies in set_parts_env() and step() are the intended apply points.
 
-    def reset_env_to(self, env_idx: int, state: dict):
+    def reset_env_to(self, env_idx: int, state: dict[str, Any]) -> None:
         """Reset to a specific state. **MUST refresh in between multiple calls
         to this function to have changes properly reflected in each environment.
         Also might want to set a zero-torque action via .set_dof_actuation_force_tensor
@@ -1841,7 +1849,7 @@ class FurnitureSimRLEnv(gym.Env):
 
     def reset_env(
         self, env_idx: int, reset_franka: bool = True, reset_parts: bool = True
-    ):
+    ) -> None:
         """Reset the environment
 
         Args:
@@ -1880,7 +1888,7 @@ class FurnitureSimRLEnv(gym.Env):
 
     def _reset_franka(
         self, env_idx: Optional[int] = None, dof_pos: Optional[torch.Tensor] = None
-    ):
+    ) -> None:
         if dof_pos is None:
             dof_pos = torch.from_numpy(self.franka_default_dof_pos).to(
                 dtype=torch.float32, device=self.device
@@ -1931,7 +1939,7 @@ class FurnitureSimRLEnv(gym.Env):
         # self.physx_system.gpu_apply_articulation_target_position()
         # self.physx_system.gpu_apply_articulation_target_velocity()
 
-    def set_franka(self, dof_pos: torch.Tensor):
+    def set_franka(self, dof_pos: torch.Tensor) -> None:
         self._reset_franka(dof_pos=dof_pos)
 
     def _reset_parts(
@@ -1939,7 +1947,7 @@ class FurnitureSimRLEnv(gym.Env):
         env_idx: int,
         parts_poses: Optional[np.ndarray] = None,
         skip_set_state: bool = False,
-    ):
+    ) -> None:
         """Resets furniture parts to the initial pose.
         part_poses: quaternion wxyz"""
         for part_idx, part in enumerate(self.furnitures[env_idx].parts):
@@ -2066,7 +2074,7 @@ class FurnitureSimRLEnv(gym.Env):
         self,
         env_idx: int,
         parts_poses: np.ndarray,
-    ):
+    ) -> None:
         """Resets furniture parts to the initial pose.
         part_poses: quaternion xyzw"""
 
@@ -2189,14 +2197,14 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_apply_rigid_dynamic_force()
         self.physx_system.gpu_apply_rigid_dynamic_torque()
 
-    def step_viewer(self):
+    def step_viewer(self) -> None:
         if self.viewer is None:
             return
         self.physx_system.sync_poses_gpu_to_cpu()
         # self.scenes[0].update_render()  # This is not needed for viewer rendering
         self.viewer.render()
 
-    def _fetch_all(self):
+    def _fetch_all(self) -> None:
         # fetch data from the Physx
         self.physx_system.gpu_fetch_rigid_dynamic_data()
         self.physx_system.gpu_fetch_articulation_link_pose()
@@ -2208,7 +2216,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_fetch_articulation_target_qpos()
         self.physx_system.gpu_fetch_articulation_target_qvel()
 
-    def _apply_all(self):
+    def _apply_all(self) -> None:
         """Apply ALL GPU buffers. Use ONLY during reset / state restoration.
         During normal stepping, use _apply_action_only() instead to avoid
         overwriting PhysX-computed qpos/qvel/rigid body states."""
@@ -2223,7 +2231,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_apply_articulation_target_position()
         self.physx_system.gpu_apply_articulation_target_velocity()
 
-    def _apply_action_only(self):
+    def _apply_action_only(self) -> None:
         """Selectively apply only the buffers modified by update_action().
         This avoids overwriting PhysX-simulated qpos/qvel/rigid body data
         with stale buffer values, which was the root cause of training
@@ -2248,7 +2256,7 @@ class FurnitureSimRLEnv(gym.Env):
     @torch.no_grad()
     def step(
         self, action: torch.Tensor, sample_perturbations: bool = False
-    ) -> Tuple[dict, torch.Tensor, torch.Tensor, dict]:
+    ) -> tuple[EnvObservation, torch.Tensor, torch.Tensor, StepInfo]:
         # Clear any residual external forces/torques from the previous step (or from
         # _random_perturbation_of_parts at the end of the last step). Without this, perturbation
         # forces applied at the end of step T are re-applied at step T+1 by the gpu_apply calls,
@@ -2306,7 +2314,7 @@ class FurnitureSimRLEnv(gym.Env):
 
     def render_only_step(
         self, franka_dof_pos: torch.Tensor, parts_poses: np.ndarray
-    ) -> Dict[str, torch.Tensor]:
+    ) -> EnvObservation:
         """
         Set poses of all parts into the given poses and update render to obtain
         the rendered updates
@@ -2488,7 +2496,7 @@ class FurnitureSimRLEnv(gym.Env):
             device=self.device,
         )
 
-    def update_render(self):
+    def update_render(self) -> None:
         # NOTE: Only with RenderSystemGroup, GPU Render can directly access physics info from GPU
         #   Otherwise, even though render might use GPU, it needs loads physics info from CPU
         if self.viewer is not None or (
@@ -2504,7 +2512,7 @@ class FurnitureSimRLEnv(gym.Env):
     #           2. take_picture(): Generate Output sensor group or sensors
     #           3. get_picture_cuda(): Obtain results from buffer
 
-    def step_sensor(self):
+    def step_sensor(self) -> None:
         if self.render_system_group is None:
             return
         elif isinstance(self.render_system_group, sapien.render.RenderSystem):
@@ -2583,7 +2591,7 @@ class FurnitureSimRLEnv(gym.Env):
 
         return rewards
 
-    def _done(self):
+    def _done(self) -> torch.Tensor:
         if self.manual_done:
             return torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
         assembled = self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble)
@@ -2594,7 +2602,7 @@ class FurnitureSimRLEnv(gym.Env):
         self,
         max_force_magnitude: float,
         max_torque_magnitude: float,
-    ):
+    ) -> None:
         num_parts = len(self.part_entities)
         total_parts = len(self.part_entities) * self.num_envs
 
@@ -2692,8 +2700,10 @@ class FurnitureSimRLEnv(gym.Env):
         """Converts AprilTag coordinate to simulator base_tag coordinate."""
         return self.april_to_sim_mat @ april_coord_mat
 
-    def filter_and_concat_robot_state(self, robot_state: Dict[str, torch.Tensor]):
-        current_robot_state = []
+    def filter_and_concat_robot_state(
+        self, robot_state: Dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        current_robot_state: list[torch.Tensor] = []
         for rs in ROBOT_STATES:
             if rs not in robot_state:
                 continue
@@ -2724,7 +2734,7 @@ class FurnitureSimRLEnv(gym.Env):
         )
 
     @property
-    def action_space(self):
+    def action_space(self) -> gym.spaces.Box:
         # Action space to be -1.0 to 1.0.
         if self.__act_rot_repr == 0:
             pose_dim = 7
@@ -2754,15 +2764,15 @@ class FurnitureSimRLEnv(gym.Env):
         return rb_states
 
     @property
-    def april_to_robot_mat(self):
+    def april_to_robot_mat(self) -> torch.Tensor:
         return torch.tensor(self.base_tag_from_robot_mat, device=self.device)
 
     @property
-    def n_parts_assemble(self):
+    def n_parts_assemble(self) -> int:
         return len(self.furniture.should_be_assembled)
 
     @property
-    def observation_space(self):
+    def observation_space(self) -> gym.spaces.Dict:
         low, high = -np.inf, np.inf
 
         # Now we also include the obstacle in the pose list.
@@ -2798,16 +2808,18 @@ class FurnitureSimRLEnv(gym.Env):
 
         return gym.spaces.Dict(obs_dict)
 
-    def __del__(self):
+    def __del__(self) -> None:
         if self.record:
             self.recorder.stop_recording()
 
 
 class FurnitureSimEnv(FurnitureSimRLEnv):
-    def __init__(self, *args, **kargs):
+    def __init__(self, *args: Any, **kargs: Any) -> None:
         super().__init__(*args, **kargs)
 
-    def _get_parts_poses(self, sim_coord=False):
+    def _get_parts_poses(
+        self, sim_coord: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get furniture parts poses in the AprilTag frame.
 
         Args:
@@ -2864,7 +2876,7 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
     @torch.no_grad()
     def step(
         self, action: torch.Tensor, sample_perturbations: bool = False
-    ) -> Tuple[dict, torch.Tensor, torch.Tensor, dict]:
+    ) -> tuple[EnvObservation, torch.Tensor, torch.Tensor, StepInfo]:
         if sample_perturbations:
             force_buf = self.physx_system.cuda_rigid_body_force.torch()
             torque_buf = self.physx_system.cuda_rigid_body_torque.torch()
@@ -2900,7 +2912,7 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
             {"obs_success": True, "action_success": True},
         )
 
-    def _reward(self):
+    def _reward(self) -> torch.Tensor:
         """Reward is 1 if two parts are assembled."""
         rewards = torch.zeros(
             (self.num_envs, 1), dtype=torch.float32, device=self.device
@@ -2917,7 +2929,7 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
 
         return rewards
 
-    def _done(self) -> bool:
+    def _done(self) -> torch.Tensor:
         dones = torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
         if self.manual_done:
             return dones
@@ -2933,13 +2945,13 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
 class FurnitureSimFullEnv(FurnitureSimEnv):
     """FurnitureSim environment with all available observations."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(obs_keys=FULL_OBS, **kwargs)
 
 
 class FurnitureSimStateEnv(FurnitureSimEnv):
     """FurnitureSim environment with state observations."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         obs_keys = DEFAULT_STATE_OBS
         super().__init__(obs_keys=obs_keys, concat_robot_state=True, **kwargs)

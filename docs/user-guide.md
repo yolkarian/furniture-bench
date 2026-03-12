@@ -194,6 +194,12 @@ The maintained top-level helper scripts live under `scripts/`:
 - `scripts/launch_server.sh`
 - `scripts/launch_daemon.sh`
 
+Additional diagnostic Python helpers live under `scripts/` as well:
+- `scripts/import_furniture_bench.py`
+- `scripts/import_franka_sapien.py`
+- `scripts/launch_sim_gymasium.py`
+- `scripts/parallel_rendering_test.py`
+
 ## 10. Removed workflows
 
 The following bundled components were intentionally removed:

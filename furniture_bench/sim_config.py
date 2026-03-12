@@ -63,10 +63,6 @@ class PhysxParams:
 @dataclass
 class GPUMemoryConfig:
     """GPU buffer capacities sized from the active `num_envs` value."""
-
-    # More generous defaults for contact-heavy furniture assembly. An RTX 5090
-    # has enough headroom for larger PhysX GPU buffers, and we have already seen
-    # PhysX request collisionStackSize >= 10_097_008, so use the next power of 2.
     temp_buffer_capacity: int = 2**17
     max_rigid_contact_count: int = 2**16
     max_rigid_patch_count: int = 2**13
@@ -74,7 +70,7 @@ class GPUMemoryConfig:
     found_lost_pairs_capacity: int = 2**18
     found_lost_aggregate_pairs_capacity: int = 2**4
     total_aggregate_pairs_capacity: int = 2**4
-    collision_stack_size: int = 2**16
+    collision_stack_size: int = 2**17
 
     def as_dict(self) -> dict[str, int]:
         """Return a plain dictionary accepted by `sapien.physx` helpers."""

@@ -21,8 +21,8 @@ It does **not** attempt to rewrite the vendored upstream documentation under:
   - replay
   - dataset download and preprocessing
 
-- [Developer guide](developer-guide.md)
-  - package boundaries
+- [Development rules](../AGENTS.md)
+  - project boundaries
   - controller cleanup
   - script conventions
   - typing / formatting expectations
