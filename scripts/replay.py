@@ -88,7 +88,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         april_tags=True,
         record=True,
     )
-    observation = env.reset()
+    observation, _info = env.reset()
 
     if args.save_output:
         color_image1 = np.zeros(

@@ -1,12 +1,12 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_DRIVER_CAPABILITIES=all
 ARG FORGE_VER=24.11.3-2
 ARG OS_TYPE=x86_64
-ARG PYTHON_VERSION=3.9
+ARG PYTHON_VERSION=3.11
 
 
-ENV VENV_NAME=furniture-sapien-gpu
+ENV VENV_NAME=furniture-bench-gpu
 
 # Use bash as a default shell.
 SHELL ["/bin/bash", "-c"]
@@ -35,14 +35,19 @@ RUN echo "source /miniforge3/etc/profile.d/conda.sh"  >> ~/.bashrc && \
     echo "source /miniforge3/etc/profile.d/mamba.sh"  >> ~/.bashrc
 
 # Create Env with Mamba
-RUN mamba create -n ${VENV_NAME} -y python=3.9 numpy=1.23.5 pytorch==2.4.1 torchvision==0.19.1 \
-    torchaudio==2.4.1  pytorch-cuda=11.8 -c pytorch -c nvidia && \ 
-    echo "mamba activate ${VENV_NAME}" >> ~/.bashrc 
+COPY environment.yml /tmp/environment.yml
+RUN CONDA_OVERRIDE_CUDA="12.9" mamba env create -y -n ${VENV_NAME} -f /tmp/environment.yml && \
+    echo "mamba activate ${VENV_NAME}" >> ~/.bashrc && \
+    mamba clean -a -y && \
+    rm /tmp/environment.yml
 
-RUN mamba run -n ${VENV_NAME} pip install https://github.com/yolkarian/SAPIEN/releases/download/nightly/sapien-3.0.0.dev20250319+5d6b8739-cp39-cp39-manylinux_2_28_x86_64.whl && \
-    mamba run -n ${VENV_NAME} pip install https://github.com/MiroPsota/torch_packages_builder/releases/download/pytorch3d-0.7.8/pytorch3d-0.7.8+pt2.1.0cu121-cp39-cp39-linux_x86_64.whl &&\
-    wget https://github.com/sapien-sim/physx-precompiled/releases/download/105.1-physx-5.3.1.patch0/linux-so.zip && \
-    mkdir -p /root/.sapien/physx/105.1-physx-5.3.1.patch0 && \
-    unzip linux-so.zip -d /root/.sapien/physx/105.1-physx-5.3.1.patch0 && \
-    rm linux-so.zip
-    
+RUN mamba run -n ${VENV_NAME} pip install https://github.com/yolkarian/SAPIEN/releases/download/nightly/sapien-3.0.0.dev20260326+4b2eaf21-cp311-cp311-manylinux_2_28_x86_64.whl && \
+    wget https://github.com/yolkarian/physx-release/releases/download/107.3-physx-5.6.1-Linux/physxgpu-linux-clang.zip && \
+    mkdir -p /root/.sapien/physx/107.3-physx-5.6.1 && \
+    unzip physxgpu-linux-clang.zip -d /root/.sapien/physx/107.3-physx-5.6.1 && \
+    rm physxgpu-linux-clang.zip
+
+# Install the project in editable mode (source copied last for layer caching)
+WORKDIR /root/furniture-bench
+COPY . .
+RUN mamba run -n ${VENV_NAME} pip install --no-deps -e .

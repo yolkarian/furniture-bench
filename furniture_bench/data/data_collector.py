@@ -34,7 +34,7 @@ class DataCollector:
         draw_marker: bool,
         manual_label: bool,
         scripted: bool,
-        randomness: Randomness.LOW,
+        randomness: Randomness,
         compute_device_id: int,
         graphics_device_id: int,
         pkl_only: bool = False,
@@ -186,7 +186,7 @@ class DataCollector:
                 continue
 
             # Execute action.
-            next_obs, rew, done, info = self.env.step(action)
+            next_obs, rew, done, _truncated, info = self.env.step(action)
 
             if rew == 1:
                 self.last_reward_idx = len(self.acts)
@@ -261,7 +261,7 @@ class DataCollector:
         return self.reset()
 
     def reset(self):
-        obs = self.env.reset()
+        obs, _info = self.env.reset()
         self._reset_collector_buffer()
 
         print("Start collecting the data!")

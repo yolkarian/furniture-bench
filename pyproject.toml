@@ -7,7 +7,7 @@ name = "furniture_bench"
 version = "0.1"
 description = "FurnitureBench: Reproducible Real-World Furniture Assembly Benchmark (RSS 2023)"
 readme = "README.md"
-requires-python = ">=3.9,<3.11"
+requires-python = "==3.11.*"
 authors = [
     {name = "CLVR @ KAIST", email = "clvr.kaist@gmail.com"}
 ]
@@ -16,8 +16,8 @@ dependencies = [
     "opencv-python",
     "pytorch_kinematics>=0.7.5",
     "gymnasium==0.29.1",
-    "ipdb",
     "imageio",
+    "torch",
     "pynput==1.7.7",
     "joblib",
     "numba",
@@ -27,6 +27,7 @@ dependencies = [
     "tqdm",
     "coacd",
     "trimesh",
+    "numpy",
 ]
 
 [tool.setuptools.packages.find]

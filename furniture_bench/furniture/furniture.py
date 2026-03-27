@@ -19,7 +19,6 @@ from furniture_bench.furniture.parts.obstacle_front import ObstacleFront
 from furniture_bench.furniture.parts.obstacle_right import ObstacleRight
 from furniture_bench.furniture.parts.obstacle_left import ObstacleLeft
 
-from ipdb import set_trace as bp
 
 
 class Furniture(ABC):

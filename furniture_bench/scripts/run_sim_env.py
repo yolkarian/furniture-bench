@@ -147,7 +147,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         device_interface = make_device(args.input_device)
         while not done:
             action, _ = device_interface.get_action()
-            _, _, done, _ = env.step(action_tensor(action, env.device, args.num_envs))
+            _, _, done, _, _ = env.step(action_tensor(action, env.device, args.num_envs))
     elif args.no_action or args.init_assembled:
         # Use the action-space neutral element to render an idle episode.
         while True:
@@ -174,14 +174,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         # Execute the hard-coded assembly policy exposed by the environment.
         while not done:
             action, _ = env.get_assembly_action()
-            _, _, done, _ = env.step(action_tensor(action, env.device, args.num_envs))
+            _, _, done, _, _ = env.step(action_tensor(action, env.device, args.num_envs))
     elif args.replay_path is not None:
         # Restore the initial simulator state before replaying logged actions.
         with open(args.replay_path, "rb") as file_obj:
             data = pickle.load(file_obj)
         env.reset_to([data["observations"][0]])
         for action in data["actions"]:
-            _, _, done, _ = env.step(action_tensor(action, env.device, args.num_envs))
+            _, _, done, _, _ = env.step(action_tensor(action, env.device, args.num_envs))
     else:
         raise ValueError("No action source specified.")
 

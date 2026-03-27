@@ -53,7 +53,6 @@ from furniture_bench.envs.observation import (
 from furniture_bench.robot.robot_state import ROBOT_STATE_DIMS, ROBOT_STATES
 from furniture_bench.furniture.parts.part import Part
 
-from ipdb import set_trace as bp
 from typing import Union, Tuple, List, Optional, Literal, Set
 
 from furniture_bench.sim_config import (
@@ -1741,8 +1740,14 @@ class FurnitureSimRLEnv(gym.Env):
             dim=0,
         ).T.to(self.device)
 
-    def reset(self, env_idxs: Optional[torch.Tensor] = None) -> EnvObservation:
-        # print("In orignal reset")
+    def reset(
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[dict] = None,
+        env_idxs: Optional[torch.Tensor] = None,
+    ) -> tuple[EnvObservation, dict]:
+        super().reset(seed=seed)
         resetting_all = env_idxs is None
         if env_idxs is None:
             env_idxs = torch.arange(
@@ -1777,7 +1782,7 @@ class FurnitureSimRLEnv(gym.Env):
         if self.record:
             self.recorder.restart_recording()
             self.recorder.record_frame(obs)
-        return obs
+        return obs, {}
 
     def refresh(self) -> None:
         self.physx_system.step()
@@ -2256,7 +2261,7 @@ class FurnitureSimRLEnv(gym.Env):
     @torch.no_grad()
     def step(
         self, action: torch.Tensor, sample_perturbations: bool = False
-    ) -> tuple[EnvObservation, torch.Tensor, torch.Tensor, StepInfo]:
+    ) -> tuple[EnvObservation, torch.Tensor, torch.Tensor, torch.Tensor, StepInfo]:
         # Clear any residual external forces/torques from the previous step (or from
         # _random_perturbation_of_parts at the end of the last step). Without this, perturbation
         # forces applied at the end of step T are re-applied at step T+1 by the gpu_apply calls,
@@ -2290,7 +2295,10 @@ class FurnitureSimRLEnv(gym.Env):
         if self.record:
             self.recorder.record_frame(obs)
         reward = self._reward()
-        done = self._done()
+        terminated = self._done()
+        # Truncation is not used in this environment; all episode endings are
+        # terminal (task success or failure).
+        truncated = torch.zeros_like(terminated)
         self.env_steps += 1
         if sample_perturbations:
             self._random_perturbation_of_parts(
@@ -2304,7 +2312,8 @@ class FurnitureSimRLEnv(gym.Env):
         return (
             obs,
             reward,
-            done,
+            terminated,
+            truncated,
             {
                 "obs_success": True,
                 "action_success": True,
@@ -2876,7 +2885,7 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
     @torch.no_grad()
     def step(
         self, action: torch.Tensor, sample_perturbations: bool = False
-    ) -> tuple[EnvObservation, torch.Tensor, torch.Tensor, StepInfo]:
+    ) -> tuple[EnvObservation, torch.Tensor, torch.Tensor, torch.Tensor, StepInfo]:
         if sample_perturbations:
             force_buf = self.physx_system.cuda_rigid_body_force.torch()
             torque_buf = self.physx_system.cuda_rigid_body_torque.torch()
@@ -2897,7 +2906,10 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
         if self.record:
             self.recorder.record_frame(obs)
         reward = self._reward()
-        done = self._done()
+        terminated = self._done()
+        # Truncation is not used in this environment; all episode endings are
+        # terminal (task success or failure).
+        truncated = torch.zeros_like(terminated)
         self.env_steps += 1
         if sample_perturbations:
             self._random_perturbation_of_parts(
@@ -2908,7 +2920,8 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
         return (
             obs,
             reward,
-            done,
+            terminated,
+            truncated,
             {"obs_success": True, "action_success": True},
         )
 

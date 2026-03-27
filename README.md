@@ -10,29 +10,29 @@ This repository now centers on:
 - maintained top-level helpers under `scripts/`
 - project documentation under `docs/`
 
-The repository no longer bundles:
-- the old offline RL / IQL stack
-- vendored wheel artifacts
-- the unused top-level `config/` directory
-- legacy controller implementations other than DiffIK
 
 ## Quick start
 
 ### 1. Install
 
 Python requirement:
-- Python `>=3.9,<3.11`
+- Python `3.11` only
 
-Install the package directly:
+The recommended way to set up the environment is with conda (or mamba):
+
+```bash
+conda env create -f environment.yml
+conda activate furniture-bench
+```
+
+This creates a conda environment named `furniture-bench` with all dependencies
+(including CUDA, PyTorch, and gymnasium 0.29.1) and installs the package in
+editable mode.
+
+Alternatively, inside an existing Python 3.11 environment:
 
 ```bash
 pip install -e .
-```
-
-Or use the compatibility helper:
-
-```bash
-bash scripts/install_model_deps.sh
 ```
 
 ### 2. Run the simulator

@@ -1,0 +1,9 @@
+.git
+.kilo
+__pycache__
+*.pyc
+*.egg-info
+.mypy_cache
+.pytest_cache
+repomix-output.xml
+TODO.md

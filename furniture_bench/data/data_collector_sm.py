@@ -87,7 +87,7 @@ class DataCollectorSpaceMouse:
         draw_marker: bool,
         manual_label: bool,
         scripted: bool,
-        randomness: Randomness.LOW,
+        randomness: Randomness,
         gpu_id: int = 0,
         pkl_only: bool = False,
         save_failure: bool = False,
@@ -437,7 +437,7 @@ class DataCollectorSpaceMouse:
                         continue
 
                     # Execute action.
-                    next_obs, rew, done, info = self.env.step(action)
+                    next_obs, rew, done, _truncated, info = self.env.step(action)
 
                     if rew == 1:
                         self.last_reward_idx = len(self.acts)
@@ -524,7 +524,7 @@ class DataCollectorSpaceMouse:
         return self.reset()
 
     def reset(self) -> Any:
-        obs = self.env.reset()
+        obs, _info = self.env.reset()
         self._reset_collector_buffer()
 
         self.verbose_print("Start collecting the data!")

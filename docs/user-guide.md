@@ -3,13 +3,24 @@
 ## 1. Requirements
 
 Python requirement:
-- Python `>=3.8,<3.11`
+- Python `3.11` only
 
-If you prefer the provided Conda environment file, see `environment.yml`.
+The project uses `gymnasium==0.29.1` and SAPIEN for physics simulation.
 
 ## 2. Installation
 
-Install the package directly:
+The recommended setup uses conda (or mamba) with the provided environment file:
+
+```bash
+conda env create -f environment.yml
+conda activate furniture-bench
+```
+
+This creates a conda environment named `furniture-bench` with all dependencies
+(including CUDA, PyTorch, and gymnasium 0.29.1) and installs the package in
+editable mode.
+
+Alternatively, inside an existing Python 3.11 environment:
 
 ```bash
 pip install -e .
@@ -21,7 +32,7 @@ Or use the compatibility helper script:
 bash scripts/install_model_deps.sh
 ```
 
-At the moment, that helper simply installs the local package in editable mode.
+The helper script creates or updates the conda environment from `environment.yml`.
 
 ## 3. Supported workflows
 

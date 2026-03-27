@@ -9,7 +9,6 @@ import numpy as np
 import numpy.typing as npt
 
 from furniture_bench.data.trajectory_types import ArrayLike, RobotStateDict
-from ipdb import set_trace as bp
 
 # List of robot state we are going to use during training and testing.
 ROBOT_STATES: list[str] = [

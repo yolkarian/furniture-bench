@@ -29,7 +29,7 @@ If the request is already concrete, skip generic discovery and go straight to th
   `furniture_bench/utils` for shared math and support code.
 - Prefer maintained CLIs under `furniture_bench/scripts/` and `scripts/`.
 - If local `ManiSkill/` or `SAPIEN/` trees are present, treat them as reference-only unless the user explicitly asks for dependency-management work. Maintained code should keep targeting the installed `sapien` package rather than a vendored source tree.
-- `pyproject.toml` is the source of truth for Python compatibility: `>=3.9,<3.11`.
+- `pyproject.toml` is the source of truth for Python compatibility: `==3.11.*`.
 - Repomix output is dominated by huge mesh assets. Avoid sweeping searches over `furniture_bench/assets/`, `furniture_bench/assets_no_tags/`, or `repomix-output.xml` unless the task explicitly targets them.
 - `assets/` and `assets_no_tags/` overlap but are not identical. Never bulk-sync, dedupe, or rename across them without an explicit migration plan.
 - DiffIK is the only maintained controller path. `osc` is a compatibility alias and should keep mapping to DiffIK unless the user explicitly asks for a breaking CLI change.
@@ -48,7 +48,8 @@ If the request is already concrete, skip generic discovery and go straight to th
 - When changing simulation scaling or memory capacity logic, keep `GPUMemoryConfig` dynamic: define base capacities in `furniture_bench/sim_config.py`, scale from `num_envs`, round up to the next power of two, and instantiate config per environment instead of patching a shared global in place.
 
 ## Commands
-- Setup: `pip install -e .`
+- Setup: `conda env create -f environment.yml && conda activate furniture-bench`
+- Alternative setup (inside an existing Python 3.11 environment): `pip install -e .`
 - Compatibility setup: `bash scripts/install_model_deps.sh`
 - Cheap syntax check after Python changes: `python -m compileall furniture_bench scripts`
 - Shell syntax check after bash script changes: `bash -n scripts/entrypoint.sh scripts/install_model_deps.sh scripts/launch_client.sh scripts/launch_daemon.sh scripts/launch_server.sh`

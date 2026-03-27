@@ -183,27 +183,27 @@ class FurnitureBenchEnv(gym.Env):
         Args:
             action:
                 np.ndarray of size 8 (dx, dy, dz, x, y, z, w, grip)
+
+        Returns:
+            tuple: (obs, reward, terminated, truncated, info) following the
+            gymnasium 0.29 step API.
         """
         obs, obs_error = self._get_observation()
         action_success = self.robot.execute(action)
 
         if obs_error != PandaError.OK:
-            return None, 0, True, {"obs_success": False, "error": obs_error}
+            return None, 0, True, False, {"obs_success": False, "error": obs_error}
 
-        ret = [
-            obs,
-            self._reward(),
-            self._done(),
-            {"action_success": action_success, "obs_success": True},
-        ]
+        terminated = self._done()
+        info = {"action_success": action_success, "obs_success": True}
 
         self.env_steps += 1
 
         if self.manual_reset:
             _, collect_enum = self.device_interface.get_action()
             if collect_enum == CollectEnum.RESET:
-                ret[2] = True
-        return ret
+                terminated = True
+        return obs, self._reward(), terminated, False, info
 
     def _reward(self):
         """Reward is 1 if two parts are assembled."""
@@ -418,14 +418,20 @@ class FurnitureBenchEnv(gym.Env):
         cv2.waitKey(1)
         return img
 
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
+        """Reset the environment.
+
+        Returns:
+            tuple: (obs, info) following the gymnasium 0.29 reset API.
+        """
+        super().reset(seed=seed)
         gym.logger.info("[env] Resetting environment.")
 
         # Reset robot.
         robot_success = self.robot.reset(self.randomness)
         if not robot_success:
             gym.logger.warn("[env] Cannot reset the robot.")
-            return None
+            return None, {"error": "reset_failed"}
 
         # Reset furniture parts.
         if self.randomness == Randomness.MEDIUM:
@@ -560,10 +566,10 @@ class FurnitureBenchEnv(gym.Env):
         obs, obs_error = self._get_observation()
         if obs_error != PandaError.OK:
             gym.logger.warn("[env] Warning: Getting observation was not successful.")
-            return None, obs_error
+            return None, {"obs_error": obs_error}
         gym.logger.info("[env] Reset done.")
 
-        return obs
+        return obs, {}
 
     def grasp_and_noise(self):
         if self.from_skill in [1, 3]:

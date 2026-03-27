@@ -20,13 +20,14 @@ class FurnitureDummyBase(gym.Env):
         raise NotImplementedError
 
     def step(self, action):
-        return self._get_observation(), self._reward(), False, {}
+        return self._get_observation(), self._reward(), False, False, {}
 
     def _reward(self):
         return 0.0
 
-    def reset(self):
-        return self._get_observation()
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        return self._get_observation(), {}
 
     def _get_observation(self):
         raise NotImplementedError
