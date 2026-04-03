@@ -149,6 +149,8 @@ class FurnitureSimRLEnv(gym.Env):
             else SHADER_DICT["default"]
         )
         self.record = record
+        self.recorder: Optional[VideoRecorder] = None
+        self._closed = False
 
         # ``osc`` is kept as a compatibility alias so older scripts still work,
         # but the refactored simulator only executes the DiffIK control path.
@@ -350,6 +352,23 @@ class FurnitureSimRLEnv(gym.Env):
         self.base_tag_from_robot_mat: NDArray[np.float32] = config["robot"][
             "tag_base_from_robot_base"
         ]
+        self._sim_to_robot_mat = torch.tensor(
+            self.franka_from_origin_mat, device=self.device
+        )
+        self._sim_to_april_mat = torch.tensor(
+            np.linalg.inv(self.base_tag_from_robot_mat)
+            @ np.linalg.inv(self.franka_from_origin_mat),
+            device=self.device,
+        )
+        self._april_to_robot_mat = torch.tensor(
+            self.base_tag_from_robot_mat, device=self.device
+        )
+        self._obstacle_right_offset_torch = torch.tensor(
+            [-0.075, -0.175, 0], dtype=torch.float32, device=self.device
+        )
+        self._obstacle_left_offset_torch = torch.tensor(
+            [-0.075, 0.175, 0], dtype=torch.float32, device=self.device
+        )
 
         self.base_tag_pose = sapien.Pose()
         base_tag_pos = T.pos_from_mat(config["robot"]["tag_base_from_robot_base"])
@@ -816,6 +835,9 @@ class FurnitureSimRLEnv(gym.Env):
                     config["robot"]["reset_joints"], dtype=np.float32
                 )
                 self.franka_default_dof_pos[7:] = self.max_gripper_width / 2
+                self._franka_default_dof_pos_torch = torch.from_numpy(
+                    self.franka_default_dof_pos
+                ).to(dtype=torch.float32, device=self.device)
 
             # NOTE(Yuke): Refer to mani_skill utils structs articulations.py Articulation qpos
             # Direct setting with entity object is impossible for GPU Simulator
@@ -1489,6 +1511,10 @@ class FurnitureSimRLEnv(gym.Env):
                 "[one_leg, cabinet, lamp, round_table] are supported for scripted agent"
             )
 
+        rb_states = self.rb_states
+        sim_to_april_mat = self.sim_to_april_mat
+        april_to_robot_mat = self.april_to_robot_mat
+
         if self.assemble_idx > len(self.furniture.should_be_assembled):
             return torch.tensor([0, 0, 0, 0, 0, 0, 1, -1], device=self.device)
 
@@ -1513,14 +1539,14 @@ class FurnitureSimRLEnv(gym.Env):
         part1: Part = self.furniture.parts[part_idx1]
         part1_name = part1.name
         part1_pose = C.to_homogeneous(
-            self.rb_states[self.parts_gpu_index[part1_name][0], :3],
-            C.quat2mat(self.rb_states[self.parts_gpu_index[part1_name][0], 3:7]),
+            rb_states[self.parts_gpu_index[part1_name][0], :3],
+            C.quat2mat(rb_states[self.parts_gpu_index[part1_name][0], 3:7]),
         )
         part2: Part = self.furniture.parts[part_idx2]
         part2_name = part2.name
         part2_pose = C.to_homogeneous(
-            self.rb_states[self.parts_gpu_index[part2_name][0], :3],
-            C.quat2mat(self.rb_states[self.parts_gpu_index[part2_name][0], 3:7]),
+            rb_states[self.parts_gpu_index[part2_name][0], :3],
+            C.quat2mat(rb_states[self.parts_gpu_index[part2_name][0], 3:7]),
         )
         rel_pose: torch.Tensor = torch.linalg.inv(part1_pose) @ part2_pose
         assembled_rel_poses = self.furniture.assembled_rel_poses[(part_idx1, part_idx2)]
@@ -1540,20 +1566,20 @@ class FurnitureSimRLEnv(gym.Env):
                 ee_pos,
                 ee_quat,
                 gripper_width,
-                self.rb_states,
+                rb_states,
                 parts_gpu_index,
-                self.sim_to_april_mat,
-                self.april_to_robot_mat,
+                sim_to_april_mat,
+                april_to_robot_mat,
             )
         elif not part2.pre_assemble_done:
             goal_pos, goal_ori, gripper, skill_complete = part2.pre_assemble(
                 ee_pos,
                 ee_quat,
                 gripper_width,
-                self.rb_states,
+                rb_states,
                 parts_gpu_index,
-                self.sim_to_april_mat,
-                self.april_to_robot_mat,
+                sim_to_april_mat,
+                april_to_robot_mat,
             )
         else:
             goal_pos, goal_ori, gripper, skill_complete = self.furniture.parts[
@@ -1562,10 +1588,10 @@ class FurnitureSimRLEnv(gym.Env):
                 ee_pos,
                 ee_quat,
                 gripper_width,
-                self.rb_states,
+                rb_states,
                 parts_gpu_index,
-                self.sim_to_april_mat,
-                self.april_to_robot_mat,
+                sim_to_april_mat,
+                april_to_robot_mat,
                 self.furniture.parts[part_idx1].name,
             )
 
@@ -1691,7 +1717,7 @@ class FurnitureSimRLEnv(gym.Env):
         )
         self.physx_system.cuda_articulation_qpos.torch()[
             self.franka_gpu_index, : self.franka_num_dof
-        ] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
+        ] = self._franka_default_dof_pos_torch
         self.physx_system.cuda_articulation_qvel.torch()[:, :] = torch.zeros_like(
             self.physx_system.cuda_articulation_qvel.torch()
         ).to(self.device)
@@ -1702,7 +1728,7 @@ class FurnitureSimRLEnv(gym.Env):
         #   state because of the existence of PD Controller of Physx ()
         self.physx_system.cuda_articulation_target_qpos.torch()[
             self.franka_gpu_index, : self.franka_num_dof
-        ] = torch.from_numpy(self.franka_default_dof_pos).to(self.device)
+        ] = self._franka_default_dof_pos_torch
         self.physx_system.cuda_articulation_link_data.torch()[:, 7:] = torch.zeros_like(
             self.physx_system.cuda_articulation_link_data.torch()[:, 7:]
         ).to(self.device)
@@ -1895,9 +1921,9 @@ class FurnitureSimRLEnv(gym.Env):
         self, env_idx: Optional[int] = None, dof_pos: Optional[torch.Tensor] = None
     ) -> None:
         if dof_pos is None:
-            dof_pos = torch.from_numpy(self.franka_default_dof_pos).to(
-                dtype=torch.float32, device=self.device
-            )
+            dof_pos = self._franka_default_dof_pos_torch
+        else:
+            dof_pos = dof_pos.to(dtype=torch.float32, device=self.device)
         if env_idx is None:
             franka_gpu_index = self.franka_gpu_index
         else:
@@ -1947,6 +1973,24 @@ class FurnitureSimRLEnv(gym.Env):
     def set_franka(self, dof_pos: torch.Tensor) -> None:
         self._reset_franka(dof_pos=dof_pos)
 
+    def _position_to_torch(self, position: Any) -> torch.Tensor:
+        return torch.as_tensor(position, dtype=torch.float32, device=self.device)
+
+    def _set_obstacle_positions(self, env_idx: int, obstacle_pose: sapien.Pose) -> None:
+        obstacle_front_pos = self._position_to_torch(obstacle_pose.p)
+        if self.parallel_in_single_scene:
+            obstacle_front_pos = obstacle_front_pos + self.scene_offsets_torch[env_idx]
+
+        self.physx_system.cuda_rigid_body_data.torch()[
+            self.obstacle_gpu_index["obstacle_front"][env_idx], :3
+        ] = obstacle_front_pos
+        self.physx_system.cuda_rigid_body_data.torch()[
+            self.obstacle_gpu_index["obstacle_right"][env_idx], :3
+        ] = obstacle_front_pos + self._obstacle_right_offset_torch
+        self.physx_system.cuda_rigid_body_data.torch()[
+            self.obstacle_gpu_index["obstacle_left"][env_idx], :3
+        ] = obstacle_front_pos + self._obstacle_left_offset_torch
+
     def _reset_parts(
         self,
         env_idx: int,
@@ -1982,12 +2026,13 @@ class FurnitureSimRLEnv(gym.Env):
 
             # Load the Pose into buffer (offset)
             if self.parallel_in_single_scene:
-                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = torch.tensor(
-                    part_pose.p + self.scene_offsets_np[env_idx], device=self.device
+                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = (
+                    self._position_to_torch(part_pose.p)
+                    + self.scene_offsets_torch[env_idx]
                 )
             else:
-                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = torch.tensor(
-                    part_pose.p, device=self.device
+                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = (
+                    self._position_to_torch(part_pose.p)
                 )
             self.physx_system.cuda_rigid_body_data.torch()[idxs, 3:7] = torch.tensor(
                 part_pose.q,
@@ -2020,51 +2065,8 @@ class FurnitureSimRLEnv(gym.Env):
         else:
             obstacle_pose = self.obstacle_front_pose
 
-        # Calculate the offsets for the front and side obstacles
-        obstacle_right_offset = np.array((-0.075, -0.175, 0), dtype=np.float32)
-        obstacle_left_offset = np.array((-0.075, 0.175, 0), dtype=np.float32)
-
         # Write to GPU buffer. Since obstacles are static objects, no need to reset velocity
-        if self.parallel_in_single_scene:
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_front"][env_idx], :3
-            ] = torch.from_numpy(obstacle_pose.p + self.scene_offsets_np[env_idx]).to(
-                dtype=torch.float32, device=self.device
-            )
-
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_right"][env_idx], :3
-            ] = torch.from_numpy(
-                obstacle_pose.p + obstacle_right_offset + self.scene_offsets_np[env_idx]
-            ).to(
-                dtype=torch.float32, device=self.device
-            )
-
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_left"][env_idx], :3
-            ] = torch.from_numpy(
-                obstacle_pose.p + obstacle_left_offset + self.scene_offsets_np[env_idx]
-            ).to(
-                dtype=torch.float32, device=self.device
-            )
-        else:
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_front"][env_idx], :3
-            ] = torch.from_numpy(obstacle_pose.p).to(
-                dtype=torch.float32, device=self.device
-            )
-
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_right"][env_idx], :3
-            ] = torch.from_numpy(obstacle_pose.p + obstacle_right_offset).to(
-                dtype=torch.float32, device=self.device
-            )
-
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_left"][env_idx], :3
-            ] = torch.from_numpy(obstacle_pose.p + obstacle_left_offset).to(
-                dtype=torch.float32, device=self.device
-            )
+        self._set_obstacle_positions(env_idx, obstacle_pose)
 
         # Quaternion unused
 
@@ -2108,12 +2110,13 @@ class FurnitureSimRLEnv(gym.Env):
 
             # Load the Pose into buffer (offset)
             if self.parallel_in_single_scene:
-                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = torch.tensor(
-                    part_pose.p + self.scene_offsets_np[env_idx], device=self.device
+                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = (
+                    self._position_to_torch(part_pose.p)
+                    + self.scene_offsets_torch[env_idx]
                 )
             else:
-                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = torch.tensor(
-                    part_pose.p, device=self.device
+                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = (
+                    self._position_to_torch(part_pose.p)
                 )
             self.physx_system.cuda_rigid_body_data.torch()[idxs, 3:7] = torch.tensor(
                 part_pose.q,
@@ -2147,51 +2150,8 @@ class FurnitureSimRLEnv(gym.Env):
         else:
             obstacle_pose = self.obstacle_front_pose
 
-        # Calculate the offsets for the front and side obstacles
-        obstacle_right_offset = np.array((-0.075, -0.175, 0), dtype=np.float32)
-        obstacle_left_offset = np.array((-0.075, 0.175, 0), dtype=np.float32)
-
         # Write to GPU buffer. Since obstacles are static objects, no need to reset velocity
-        if self.parallel_in_single_scene:
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_front"][env_idx], :3
-            ] = torch.from_numpy(obstacle_pose.p + self.scene_offsets_np[env_idx]).to(
-                dtype=torch.float32, device=self.device
-            )
-
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_right"][env_idx], :3
-            ] = torch.from_numpy(
-                obstacle_pose.p + obstacle_right_offset + self.scene_offsets_np[env_idx]
-            ).to(
-                dtype=torch.float32, device=self.device
-            )
-
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_left"][env_idx], :3
-            ] = torch.from_numpy(
-                obstacle_pose.p + obstacle_left_offset + self.scene_offsets_np[env_idx]
-            ).to(
-                dtype=torch.float32, device=self.device
-            )
-        else:
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_front"][env_idx], :3
-            ] = torch.from_numpy(obstacle_pose.p).to(
-                dtype=torch.float32, device=self.device
-            )
-
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_right"][env_idx], :3
-            ] = torch.from_numpy(obstacle_pose.p + obstacle_right_offset).to(
-                dtype=torch.float32, device=self.device
-            )
-
-            self.physx_system.cuda_rigid_body_data.torch()[
-                self.obstacle_gpu_index["obstacle_left"][env_idx], :3
-            ] = torch.from_numpy(obstacle_pose.p + obstacle_left_offset).to(
-                dtype=torch.float32, device=self.device
-            )
+        self._set_obstacle_positions(env_idx, obstacle_pose)
         # Clear residual external wrench only for the target env.
         self._clear_rigid_body_wrenches(env_idx)
 
@@ -2732,15 +2692,11 @@ class FurnitureSimRLEnv(gym.Env):
 
     @property
     def sim_to_robot_mat(self) -> torch.Tensor:
-        return torch.tensor(self.franka_from_origin_mat, device=self.device)
+        return self._sim_to_robot_mat
 
     @property
     def sim_to_april_mat(self) -> torch.Tensor:
-        return torch.tensor(
-            np.linalg.inv(self.base_tag_from_robot_mat)
-            @ np.linalg.inv(self.franka_from_origin_mat),
-            device=self.device,
-        )
+        return self._sim_to_april_mat
 
     @property
     def action_space(self) -> gym.spaces.Box:
@@ -2774,7 +2730,7 @@ class FurnitureSimRLEnv(gym.Env):
 
     @property
     def april_to_robot_mat(self) -> torch.Tensor:
-        return torch.tensor(self.base_tag_from_robot_mat, device=self.device)
+        return self._april_to_robot_mat
 
     @property
     def n_parts_assemble(self) -> int:
@@ -2817,9 +2773,35 @@ class FurnitureSimRLEnv(gym.Env):
 
         return gym.spaces.Dict(obs_dict)
 
+    def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+
+        viewer = getattr(self, "viewer", None)
+        if viewer is not None:
+            try:
+                viewer.close()
+            except Exception:
+                pass
+        self.viewer = None
+
+        recorder = getattr(self, "recorder", None)
+        if recorder is not None:
+            try:
+                recorder.stop_recording()
+            except Exception:
+                pass
+        self.recorder = None
+
+        self.render_system_group = None
+        if hasattr(self, "sensor_groups"):
+            self.sensor_groups = {}
+        if hasattr(self, "sensors"):
+            self.sensors = {}
+
     def __del__(self) -> None:
-        if self.record:
-            self.recorder.stop_recording()
+        self.close()
 
 
 class FurnitureSimEnv(FurnitureSimRLEnv):
@@ -2848,12 +2830,13 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
             dtype=torch.float32,
             device=self.device,
         )
+        rb_states = self.rb_states
         if sim_coord:
             # Return the poses in the simulator coordinate.
             for part_idx in range(len(self.furniture.parts)):
                 part = self.furniture.parts[part_idx]
                 rb_idx = self.parts_gpu_index[part.name]
-                part_pose = self.rb_states[rb_idx, :7]
+                part_pose = rb_states[rb_idx, :7]
                 parts_poses[
                     :, part_idx * self.pose_dim : (part_idx + 1) * self.pose_dim
                 ] = part_pose[:, : self.pose_dim]
@@ -2864,7 +2847,7 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
             for part_idx in range(len(self.furniture.parts)):
                 part = self.furniture.parts[part_idx]
                 rb_idx = self.parts_gpu_index[part.name][env_idx]
-                part_pose = self.rb_states[rb_idx, :7]
+                part_pose = rb_states[rb_idx, :7]
                 # To AprilTag coordinate.
                 part_pose = torch.concat(
                     [
