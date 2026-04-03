@@ -114,7 +114,7 @@ def diffik_factory(
 
             ee_mat = C.quaternion_to_matrix(ee_quat_xyzw)
             goal_mat = C.quaternion_to_matrix(goal_ori_xyzw)
-            mat_error = torch.matmul(goal_mat, torch.linalg.inv(ee_mat))
+            mat_error = torch.matmul(goal_mat, ee_mat.transpose(-1, -2))
             ee_delta_axis_angle = C.matrix_to_axis_angle(mat_error)
 
             ee_pos_vel = position_error * self.pos_scalar / self.dt
@@ -134,8 +134,22 @@ def diffik_factory(
             Polymetis parameter tensors we mirror the values there as well so both
             interfaces stay synchronized.
             """
-            self.goal_pos = goal_pos.clone()
-            self.goal_ori = goal_ori.clone()
+            if (
+                self.goal_pos.shape == goal_pos.shape
+                and self.goal_pos.device == goal_pos.device
+                and self.goal_pos.dtype == goal_pos.dtype
+            ):
+                self.goal_pos.copy_(goal_pos)
+            else:
+                self.goal_pos = goal_pos.clone()
+            if (
+                self.goal_ori.shape == goal_ori.shape
+                and self.goal_ori.device == goal_ori.device
+                and self.goal_ori.dtype == goal_ori.dtype
+            ):
+                self.goal_ori.copy_(goal_ori)
+            else:
+                self.goal_ori = goal_ori.clone()
 
             with torch.no_grad():
                 if self.ee_pos_desired.shape == goal_pos.shape:

@@ -21,6 +21,11 @@ It does **not** attempt to rewrite the vendored upstream documentation under:
   - replay
   - dataset download and preprocessing
 
+- [Avoiding steady CPU memory growth in SAPIEN environments](sapien-memory.md)
+  - common resident set size (RSS) growth patterns in simulator hot paths
+  - reset and controller allocation pitfalls
+  - profiling and validation checklist
+
 - [Development rules](../AGENTS.md)
   - project boundaries
   - controller cleanup

@@ -85,6 +85,9 @@ Important notes:
 - `GPUMemoryConfig` scales from `num_envs`.
 - The maintained controller path is DiffIK.
 - Some older CLIs still accept `osc`; it now acts only as a compatibility alias to DiffIK.
+- If you are changing the SAPIEN simulator internals, read
+  [Avoiding steady CPU memory growth in SAPIEN environments](sapien-memory.md)
+  before modifying reset or controller hot paths.
 
 ## 6. Collecting demonstrations
 

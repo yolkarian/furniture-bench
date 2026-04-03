@@ -363,6 +363,9 @@ class FurnitureSimRLEnv(gym.Env):
         self._april_to_robot_mat = torch.tensor(
             self.base_tag_from_robot_mat, device=self.device
         )
+        self._april_to_sim_mat_np = self.april_to_sim_mat.astype(np.float32, copy=True)
+        self._april_to_sim_rot_np = self._april_to_sim_mat_np[:3, :3]
+        self._april_to_sim_trans_np = self._april_to_sim_mat_np[:3, 3]
         self._obstacle_right_offset_torch = torch.tensor(
             [-0.075, -0.175, 0], dtype=torch.float32, device=self.device
         )
@@ -404,6 +407,9 @@ class FurnitureSimRLEnv(gym.Env):
             dtype=np.float32,
         )
         self.obstacle_left_pose.q = self.obstacle_front_pose.q
+        self._obstacle_front_pos_torch = torch.as_tensor(
+            self.obstacle_front_pose.p, dtype=torch.float32, device=self.device
+        )
 
         # Define parameters of the camera
         self.resize_img = resize_img
@@ -513,6 +519,37 @@ class FurnitureSimRLEnv(gym.Env):
 
         self.act_low = torch.from_numpy(self.action_space.low).to(device=self.device)
         self.act_high = torch.from_numpy(self.action_space.high).to(device=self.device)
+        self._update_goal_pose_buffer = torch.zeros(
+            (self.num_envs, 7), dtype=torch.float32, device=self.device
+        )
+        self._update_target_qpos_buffer = torch.zeros(
+            (self.num_envs, self.franka_num_dof),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._update_target_qf_buffer = torch.zeros(
+            (self.num_envs, self.franka_num_dof),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._jacobian_ee_buffer = torch.zeros(
+            (self.num_envs, 6, self.franka_num_dof),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._identity_quat_xyzw = torch.zeros(
+            (self.num_envs, 4), dtype=torch.float32, device=self.device
+        )
+        self._identity_quat_xyzw[:, -1] = 1.0
+        self._closed_gripper_width_buffer = torch.zeros(
+            self.num_envs, dtype=torch.float32, device=self.device
+        )
+        self._open_gripper_width_buffer = torch.full(
+            (self.num_envs,),
+            self.max_gripper_width,
+            dtype=torch.float32,
+            device=self.device,
+        )
         self.sim_steps = math.ceil(1.0 / config["robot"]["hz"] / self.sim_params.dt)
         print(f"Control per {self.sim_steps} Step(s)")
 
@@ -1327,10 +1364,8 @@ class FurnitureSimRLEnv(gym.Env):
         end_effector_pose = torch.zeros(
             (self.num_envs, 7), dtype=torch.float32, device=self.device
         )
-        end_effector_pose[:] = self.physx_system.cuda_rigid_body_data.torch()[
-            self.end_effector_gpu_index, :7
-        ]
-        end_effector_pose[:, :3] -= self.physx_system.cuda_rigid_body_data.torch()[
+        end_effector_pose[:] = self._cuda_rigid_body_data[self.end_effector_gpu_index, :7]
+        end_effector_pose[:, :3] -= self._cuda_rigid_body_data[
             self.root_link_gpu_index, :3
         ]
         return end_effector_pose
@@ -1354,9 +1389,7 @@ class FurnitureSimRLEnv(gym.Env):
         ee_lin_vel = torch.zeros(
             (self.num_envs, 3), dtype=torch.float32, device=self.device
         )
-        ee_lin_vel[:] = self.physx_system.cuda_rigid_body_data.torch()[
-            self.end_effector_gpu_index, 7:10
-        ]
+        ee_lin_vel[:] = self._cuda_rigid_body_data[self.end_effector_gpu_index, 7:10]
         return ee_lin_vel
 
     def get_ee_rot_vel(self) -> torch.Tensor:
@@ -1368,7 +1401,7 @@ class FurnitureSimRLEnv(gym.Env):
         ee_rot_vel = torch.zeros(
             (self.num_envs, 3), dtype=torch.float32, device=self.device
         )
-        ee_rot_vel[:] = self.physx_system.cuda_rigid_body_data.torch()[
+        ee_rot_vel[:] = self._cuda_rigid_body_data[
             self.end_effector_gpu_index, 10:13
         ]
         return ee_rot_vel
@@ -1383,7 +1416,7 @@ class FurnitureSimRLEnv(gym.Env):
             dtype=torch.float32,
             device=self.device,
         )
-        qpos[:] = self.physx_system.cuda_articulation_qpos.torch()[
+        qpos[:] = self._cuda_articulation_qpos[
             self.franka_gpu_index, : self.franka_num_dof
         ]
         return qpos
@@ -1399,7 +1432,7 @@ class FurnitureSimRLEnv(gym.Env):
             dtype=torch.float32,
             device=self.device,
         )
-        qvel[:] = self.physx_system.cuda_articulation_qvel.torch()[
+        qvel[:] = self._cuda_articulation_qvel[
             self.franka_gpu_index, : self.franka_num_dof
         ]
         return qvel
@@ -1413,14 +1446,10 @@ class FurnitureSimRLEnv(gym.Env):
         # Use franka_gpu_index for correct buffer indexing — the GPU articulation
         # buffers are indexed by GPU articulation index, not by env index.
         joint_torques = self.stiffness * (
-            self.physx_system.cuda_articulation_target_qpos.torch()[
-                self.franka_gpu_index, :7
-            ]
+            self._cuda_articulation_target_qpos[self.franka_gpu_index, :7]
             - joint_positions
         ) + self.damping * (
-            self.physx_system.cuda_articulation_target_qvel.torch()[
-                self.franka_gpu_index, :7
-            ]
+            self._cuda_articulation_target_qvel[self.franka_gpu_index, :7]
             - joint_velocities
         )
 
@@ -1459,9 +1488,7 @@ class FurnitureSimRLEnv(gym.Env):
             parts_poses: (num_envs, num_parts * pose_dim). The poses of all parts in the AprilTag frame.
             founds: (num_envs, num_parts). Always 1 since we don't use AprilTag for detection in simulation.
         """
-        parts_poses = self.physx_system.cuda_rigid_body_data.torch()[
-            self.parts_gpu_index_tensor, :7
-        ].clone()
+        parts_poses = self._cuda_rigid_body_data[self.parts_gpu_index_tensor, :7].clone()
         if self.parallel_in_single_scene:
             parts_poses[..., :3] -= self.scene_offsets_torch.unsqueeze(1)
         # parts_poses Shape: (num_envs, num_parts, 7)
@@ -1481,8 +1508,8 @@ class FurnitureSimRLEnv(gym.Env):
     def get_obstacle_pose(
         self, sim_coord: bool = False, robot_coord: bool = False
     ) -> torch.Tensor:
-        obstacle_front_poses = self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_front"].unsqueeze(1), :7
+        obstacle_front_poses = self._cuda_rigid_body_data[
+            self._obstacle_front_gpu_index.unsqueeze(1), :7
         ].clone()
         # NOTE:(Yuke) offset should also be considered only in parallel in single scene mode
         if self.parallel_in_single_scene:
@@ -1660,6 +1687,7 @@ class FurnitureSimRLEnv(gym.Env):
     def _init_sim(self) -> None:
         # torch seed can be added before
         self.physx_system.gpu_init()
+        self._cache_cuda_tensor_views()
 
         # NOTE(Yuke): Setting the initial qpos must be complete after gpu_init
         #   and according to my understanding we should fetch first. Otherwise, the values stored
@@ -1670,11 +1698,9 @@ class FurnitureSimRLEnv(gym.Env):
         self._fetch_all()
         self._config_parts()
         # set Vel of all actors to zero
-        self.physx_system.cuda_rigid_body_data.torch()[:, 7:] = torch.zeros_like(
-            self.physx_system.cuda_rigid_body_data.torch()[:, 7:]
-        )
-        self.physx_system.cuda_rigid_body_force.torch()[:, :] = 0
-        self.physx_system.cuda_rigid_body_torque.torch()[:, :] = 0
+        self._cuda_rigid_body_data[:, 7:] = 0
+        self._cuda_rigid_body_force[:, :] = 0
+        self._cuda_rigid_body_torque[:, :] = 0
 
         self._config_franka()
 
@@ -1690,6 +1716,15 @@ class FurnitureSimRLEnv(gym.Env):
             for obj_name, entities in self.static_obj_entites.items()
             if obj_name.startswith("obstacle")
         }
+        self._obstacle_gpu_index_tensor = torch.stack(
+            [
+                self.obstacle_gpu_index["obstacle_front"],
+                self.obstacle_gpu_index["obstacle_right"],
+                self.obstacle_gpu_index["obstacle_left"],
+            ],
+            dim=1,
+        ).to(device=self.device, dtype=torch.long)
+        self._obstacle_front_gpu_index = self._obstacle_gpu_index_tensor[:, 0]
 
         self.physx_system.gpu_apply_rigid_dynamic_data()
         self.physx_system.gpu_apply_rigid_dynamic_force()
@@ -1699,6 +1734,23 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_apply_articulation_qpos()
         self.physx_system.gpu_apply_articulation_qvel()
         self.physx_system.gpu_update_articulation_kinematics()  #  ensure all updates have been applied to the system
+
+    def _cache_cuda_tensor_views(self) -> None:
+        self._cuda_rigid_body_data = self.physx_system.cuda_rigid_body_data.torch()
+        self._cuda_rigid_body_force = self.physx_system.cuda_rigid_body_force.torch()
+        self._cuda_rigid_body_torque = self.physx_system.cuda_rigid_body_torque.torch()
+        self._cuda_articulation_qpos = self.physx_system.cuda_articulation_qpos.torch()
+        self._cuda_articulation_qvel = self.physx_system.cuda_articulation_qvel.torch()
+        self._cuda_articulation_qf = self.physx_system.cuda_articulation_qf.torch()
+        self._cuda_articulation_target_qpos = (
+            self.physx_system.cuda_articulation_target_qpos.torch()
+        )
+        self._cuda_articulation_target_qvel = (
+            self.physx_system.cuda_articulation_target_qvel.torch()
+        )
+        self._cuda_articulation_link_data = (
+            self.physx_system.cuda_articulation_link_data.torch()
+        )
 
     def _init_ctrl(self) -> None:
         self.step_ctrl = diffik_factory(
@@ -1712,28 +1764,24 @@ class FurnitureSimRLEnv(gym.Env):
         # Since franka is fixed. No need to reset the root Pose
         self.franka_gpu_index = torch.tensor(
             [frank_entity.get_gpu_index() for frank_entity in self.franka_entities],
-            dtype=torch.int32,
+            dtype=torch.long,
             device=self.device,
         )
-        self.physx_system.cuda_articulation_qpos.torch()[
+        self._cuda_articulation_qpos[
             self.franka_gpu_index, : self.franka_num_dof
         ] = self._franka_default_dof_pos_torch
-        self.physx_system.cuda_articulation_qvel.torch()[:, :] = torch.zeros_like(
-            self.physx_system.cuda_articulation_qvel.torch()
-        ).to(self.device)
+        self._cuda_articulation_qvel[:, :] = 0
         # NOTE(Yuke): Set the target position to the default position as well.
         #   To avoid the error in some scenarios. For example, some joints directly are controlled
         #   with force and others are controlled with Physx PD Controller. After initialization, if someone
         #   only modifies force without giving the target qpos, the robot can bounce to some unknow
         #   state because of the existence of PD Controller of Physx ()
-        self.physx_system.cuda_articulation_target_qpos.torch()[
+        self._cuda_articulation_target_qpos[
             self.franka_gpu_index, : self.franka_num_dof
         ] = self._franka_default_dof_pos_torch
-        self.physx_system.cuda_articulation_link_data.torch()[:, 7:] = torch.zeros_like(
-            self.physx_system.cuda_articulation_link_data.torch()[:, 7:]
-        ).to(self.device)
-        self.root_link_gpu_index = torch.zeros((self.num_envs), dtype=torch.int32)
-        self.end_effector_gpu_index = torch.zeros((self.num_envs), dtype=torch.int32)
+        self._cuda_articulation_link_data[:, 7:] = 0
+        self.root_link_gpu_index = torch.zeros((self.num_envs), dtype=torch.long)
+        self.end_effector_gpu_index = torch.zeros((self.num_envs), dtype=torch.long)
         for i, frank_entity in enumerate(self.franka_entities):
             for link in frank_entity.links:
                 if link.name.endswith("panda_link0"):
@@ -1757,14 +1805,14 @@ class FurnitureSimRLEnv(gym.Env):
             part_pose_np[:] = self.part_default_pose[key]  # broadcast
             if self.parallel_in_single_scene:
                 part_pose_np[:, :3] += self.scene_offsets_np
-            self.physx_system.cuda_rigid_body_data.torch()[part_gpu_index, :7] = (
-                torch.from_numpy(part_pose_np).to(self.device)
-            )
+            self._cuda_rigid_body_data[part_gpu_index, :7] = torch.from_numpy(
+                part_pose_np
+            ).to(self.device)
         # self.parts_gpu_index_tensor: Shape (num_envs, num_parts)
         self.parts_gpu_index_tensor = self.furniture_rb_indices = torch.stack(
             [self.parts_gpu_index[part.name] for part in self.furniture.parts],
             dim=0,
-        ).T.to(self.device)
+        ).T.to(device=self.device, dtype=torch.long)
 
     def reset(
         self,
@@ -1816,28 +1864,18 @@ class FurnitureSimRLEnv(gym.Env):
         self.update_render()
 
     def _get_env_rigid_body_wrench_indices(self, env_idx: int) -> torch.Tensor:
-        env_indices = [
-            self.parts_gpu_index_tensor[env_idx]
-            .reshape(-1)
-            .to(device=self.device, dtype=torch.long)
-        ]
-        for obstacle_indices in self.obstacle_gpu_index.values():
-            env_indices.append(
-                obstacle_indices[env_idx]
-                .reshape(1)
-                .to(device=self.device, dtype=torch.long)
-            )
-
+        env_indices = [self.parts_gpu_index_tensor[env_idx].reshape(-1)]
+        env_indices.append(self._obstacle_gpu_index_tensor[env_idx].reshape(-1))
         return torch.cat(env_indices, dim=0)
 
     def _clear_rigid_body_wrenches(self, env_idx: Optional[int] = None) -> None:
         if env_idx is None:
-            self.physx_system.cuda_rigid_body_force.torch()[:, :] = 0
-            self.physx_system.cuda_rigid_body_torque.torch()[:, :] = 0
+            self._cuda_rigid_body_force[:, :] = 0
+            self._cuda_rigid_body_torque[:, :] = 0
         else:
             env_indices = self._get_env_rigid_body_wrench_indices(env_idx)
-            self.physx_system.cuda_rigid_body_force.torch()[env_indices, :] = 0
-            self.physx_system.cuda_rigid_body_torque.torch()[env_indices, :] = 0
+            self._cuda_rigid_body_force[env_indices, :] = 0
+            self._cuda_rigid_body_torque[env_indices, :] = 0
 
         # NOTE: Do NOT call gpu_apply_rigid_dynamic_force/torque() here.
         # Callers are responsible for applying via _apply_all() or an explicit gpu_apply call.
@@ -1928,38 +1966,17 @@ class FurnitureSimRLEnv(gym.Env):
             franka_gpu_index = self.franka_gpu_index
         else:
             franka_gpu_index = self.franka_gpu_index[env_idx]
-        self.physx_system.cuda_articulation_qpos.torch()[
-            franka_gpu_index, : self.franka_num_dof
-        ] = dof_pos
-        self.physx_system.cuda_articulation_qvel.torch()[
-            franka_gpu_index, : self.franka_num_dof
-        ] = torch.zeros_like(
-            self.physx_system.cuda_articulation_qvel.torch()[
-                franka_gpu_index, : self.franka_num_dof
-            ],
-            device=self.device,
-        )
+        self._cuda_articulation_qpos[franka_gpu_index, : self.franka_num_dof] = dof_pos
+        self._cuda_articulation_qvel[franka_gpu_index, : self.franka_num_dof] = 0
 
         # Set the target as well, for PD controller
-        self.physx_system.cuda_articulation_target_qpos.torch()[
+        self._cuda_articulation_target_qpos[
             franka_gpu_index, : self.franka_num_dof
         ] = dof_pos
-        self.physx_system.cuda_articulation_target_qvel.torch()[
+        self._cuda_articulation_target_qvel[
             franka_gpu_index, : self.franka_num_dof
-        ] = torch.zeros_like(
-            self.physx_system.cuda_articulation_target_qvel.torch()[
-                franka_gpu_index, : self.franka_num_dof
-            ],
-            device=self.device,
-        )
-        self.physx_system.cuda_articulation_qf.torch()[
-            franka_gpu_index, : self.franka_num_dof
-        ] = torch.zeros_like(
-            self.physx_system.cuda_articulation_qf.torch()[
-                franka_gpu_index, : self.franka_num_dof
-            ],
-            device=self.device,
-        )
+        ] = 0
+        self._cuda_articulation_qf[franka_gpu_index, : self.franka_num_dof] = 0
         # Apply Changes
         # self.physx_system.gpu_apply_articulation_qpos()
         # self.physx_system.gpu_apply_articulation_qvel()
@@ -1976,20 +1993,92 @@ class FurnitureSimRLEnv(gym.Env):
     def _position_to_torch(self, position: Any) -> torch.Tensor:
         return torch.as_tensor(position, dtype=torch.float32, device=self.device)
 
-    def _set_obstacle_positions(self, env_idx: int, obstacle_pose: sapien.Pose) -> None:
-        obstacle_front_pos = self._position_to_torch(obstacle_pose.p)
+    def _april_position_to_sim_np(self, position: Any) -> NDArray[np.float32]:
+        position_np = np.asarray(position, dtype=np.float32)
+        return (
+            self._april_to_sim_rot_np @ position_np + self._april_to_sim_trans_np
+        ).astype(np.float32, copy=False)
+
+    def _april_rotation_to_sim_quat_wxyz_np(
+        self, orientation: NDArray[np.float32]
+    ) -> NDArray[np.float32]:
+        orientation_np = np.asarray(orientation, dtype=np.float32)
+        rotation_mat = (
+            orientation_np[:3, :3]
+            if orientation_np.ndim == 2 and orientation_np.shape[0] == 4
+            else orientation_np
+        )
+        sim_rotation = self._april_to_sim_rot_np @ rotation_mat
+        return np.roll(T.mat2quat(sim_rotation), 1, axis=-1).astype(
+            np.float32, copy=False
+        )
+
+    def _write_parts_state(
+        self,
+        env_idx: int,
+        parts_poses: Optional[np.ndarray],
+        *,
+        input_quat_wxyz: bool,
+    ) -> None:
+        num_parts = len(self.furnitures[env_idx].parts)
+        part_positions_np = np.empty((num_parts, 3), dtype=np.float32)
+        part_quats_wxyz_np = np.empty((num_parts, 4), dtype=np.float32)
+
+        for part_idx, part in enumerate(self.furnitures[env_idx].parts):
+            if parts_poses is None:
+                reset_pos, reset_ori = self.get_reset_pose_part(part)
+                part_positions_np[part_idx] = self._april_position_to_sim_np(reset_pos)
+                part_quats_wxyz_np[part_idx] = self._april_rotation_to_sim_quat_wxyz_np(
+                    reset_ori
+                )
+                continue
+
+            part_pose = parts_poses[part_idx * 7 : (part_idx + 1) * 7]
+            quat_xyzw = (
+                np.roll(part_pose[3:], shift=-1, axis=-1)
+                if input_quat_wxyz
+                else part_pose[3:]
+            )
+            part_positions_np[part_idx] = self._april_position_to_sim_np(part_pose[:3])
+            part_quats_wxyz_np[part_idx] = self._april_rotation_to_sim_quat_wxyz_np(
+                T.quat2mat(quat_xyzw)
+            )
+
+        part_positions = torch.from_numpy(part_positions_np).to(device=self.device)
+        if self.parallel_in_single_scene:
+            part_positions += self.scene_offsets_torch[env_idx]
+        self._cuda_rigid_body_data[self.parts_gpu_index_tensor[env_idx], :3] = (
+            part_positions
+        )
+        self._cuda_rigid_body_data[self.parts_gpu_index_tensor[env_idx], 3:7] = (
+            torch.from_numpy(part_quats_wxyz_np).to(device=self.device)
+        )
+        self._cuda_rigid_body_data[self.parts_gpu_index_tensor[env_idx], 7:] = 0
+
+        obstacle_front_pos = (
+            self._obstacle_front_pos_torch
+            if parts_poses is None
+            else self._position_to_torch(self._april_position_to_sim_np(parts_poses[-7:-4]))
+        )
+        self._set_obstacle_positions(env_idx, obstacle_front_pos)
+
+    def _set_obstacle_positions(
+        self, env_idx: int, obstacle_front_pos: torch.Tensor
+    ) -> None:
         if self.parallel_in_single_scene:
             obstacle_front_pos = obstacle_front_pos + self.scene_offsets_torch[env_idx]
 
-        self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_front"][env_idx], :3
-        ] = obstacle_front_pos
-        self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_right"][env_idx], :3
-        ] = obstacle_front_pos + self._obstacle_right_offset_torch
-        self.physx_system.cuda_rigid_body_data.torch()[
-            self.obstacle_gpu_index["obstacle_left"][env_idx], :3
-        ] = obstacle_front_pos + self._obstacle_left_offset_torch
+        obstacle_positions = torch.stack(
+            (
+                obstacle_front_pos,
+                obstacle_front_pos + self._obstacle_right_offset_torch,
+                obstacle_front_pos + self._obstacle_left_offset_torch,
+            ),
+            dim=0,
+        )
+        self._cuda_rigid_body_data[self._obstacle_gpu_index_tensor[env_idx], :3] = (
+            obstacle_positions
+        )
 
     def _reset_parts(
         self,
@@ -1999,76 +2088,7 @@ class FurnitureSimRLEnv(gym.Env):
     ) -> None:
         """Resets furniture parts to the initial pose.
         part_poses: quaternion wxyz"""
-        for part_idx, part in enumerate(self.furnitures[env_idx].parts):
-            # Use the given pose.
-            if parts_poses is not None:
-                part_pose = parts_poses[part_idx * 7 : (part_idx + 1) * 7]
-
-                pos = part_pose[:3]
-                ori = T.to_homogeneous(
-                    [0, 0, 0], T.quat2mat(np.roll(part_pose[3:], shift=-1, axis=-1))
-                )  # Dummy zero position.
-            else:
-                pos, ori = self.get_reset_pose_part(part)
-
-            # NOTE(Yuke): recalculation instead of directly using self.part_default_pose,
-            #          since self._get_reset_pose_part can obtain pos and ori with randomness
-            part_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
-            part_pose = sapien.Pose()
-            part_pose.set_p(
-                [part_pose_mat[0, 3], part_pose_mat[1, 3], part_pose_mat[2, 3]]
-            )
-            reset_ori = self.april_coord_to_sim_coord(ori)
-            part_pose.set_q(
-                np.roll(T.mat2quat(reset_ori[:3, :3]), 1, axis=-1).astype(np.float32)
-            )
-            idxs = self.parts_gpu_index[part.name][env_idx]
-
-            # Load the Pose into buffer (offset)
-            if self.parallel_in_single_scene:
-                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = (
-                    self._position_to_torch(part_pose.p)
-                    + self.scene_offsets_torch[env_idx]
-                )
-            else:
-                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = (
-                    self._position_to_torch(part_pose.p)
-                )
-            self.physx_system.cuda_rigid_body_data.torch()[idxs, 3:7] = torch.tensor(
-                part_pose.q,
-                device=self.device,
-            )
-            # linear vel and rot vel to zero
-            self.physx_system.cuda_rigid_body_data.torch()[idxs, 7:] = 0
-
-        # Get the obstacle poses, last 7 numbers in the parts_poses tensor
-        if parts_poses is not None:
-            obstacle_pose = parts_poses[-7:]
-            pos = obstacle_pose[:3]
-            ori = T.to_homogeneous([0, 0, 0], T.quat2mat(obstacle_pose[3:]))
-            # Convert the obstacle pose from AprilTag to simulator coordinate system
-            obstacle_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
-            obstacle_pose = sapien.Pose()
-            obstacle_pose.set_p(
-                (
-                    obstacle_pose_mat[0, 3],
-                    obstacle_pose_mat[1, 3],
-                    obstacle_pose_mat[2, 3],
-                )
-            )
-            reset_ori = self.april_coord_to_sim_coord(ori)
-            obstacle_pose.set_q(
-                np.roll(T.mat2quat(reset_ori[:3, :3]), shift=1, axis=-1).astype(
-                    np.float32
-                )
-            )
-        else:
-            obstacle_pose = self.obstacle_front_pose
-
-        # Write to GPU buffer. Since obstacles are static objects, no need to reset velocity
-        self._set_obstacle_positions(env_idx, obstacle_pose)
-
-        # Quaternion unused
+        self._write_parts_state(env_idx, parts_poses, input_quat_wxyz=True)
 
         if skip_set_state:
             return
@@ -2084,74 +2104,7 @@ class FurnitureSimRLEnv(gym.Env):
     ) -> None:
         """Resets furniture parts to the initial pose.
         part_poses: quaternion xyzw"""
-
-        for part_idx, part in enumerate(self.furnitures[env_idx].parts):
-            # Use the given pose.
-
-            part_pose = parts_poses[part_idx * 7 : (part_idx + 1) * 7]
-
-            pos = part_pose[:3]
-            ori = T.to_homogeneous(
-                [0, 0, 0], T.quat2mat(part_pose[3:])
-            )  # Dummy zero position.
-
-            # NOTE(Yuke): recalculation instead of directly using self.part_default_pose,
-            #          since self._get_reset_pose_part can obtain pos and ori with randomness
-            part_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
-            part_pose = sapien.Pose()
-            part_pose.set_p(
-                [part_pose_mat[0, 3], part_pose_mat[1, 3], part_pose_mat[2, 3]]
-            )
-            reset_ori = self.april_coord_to_sim_coord(ori)
-            part_pose.set_q(
-                np.roll(T.mat2quat(reset_ori[:3, :3]), 1, axis=-1).astype(np.float32)
-            )
-            idxs = self.parts_gpu_index[part.name][env_idx]
-
-            # Load the Pose into buffer (offset)
-            if self.parallel_in_single_scene:
-                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = (
-                    self._position_to_torch(part_pose.p)
-                    + self.scene_offsets_torch[env_idx]
-                )
-            else:
-                self.physx_system.cuda_rigid_body_data.torch()[idxs, :3] = (
-                    self._position_to_torch(part_pose.p)
-                )
-            self.physx_system.cuda_rigid_body_data.torch()[idxs, 3:7] = torch.tensor(
-                part_pose.q,
-                device=self.device,
-            )
-            # linear vel and rot vel to zero
-            self.physx_system.cuda_rigid_body_data.torch()[idxs, 7:] = 0
-
-        # Get the obstacle poses, last 7 numbers in the parts_poses tensor
-
-        if parts_poses is not None:
-            obstacle_pose = parts_poses[-7:]
-            pos = obstacle_pose[:3]
-            ori = T.to_homogeneous([0, 0, 0], T.quat2mat(obstacle_pose[3:]))
-            # Convert the obstacle pose from AprilTag to simulator coordinate system
-            obstacle_pose_mat = self.april_coord_to_sim_coord(get_mat(pos, [0, 0, 0]))
-            obstacle_pose = sapien.Pose()
-            obstacle_pose.set_p(
-                (
-                    obstacle_pose_mat[0, 3],
-                    obstacle_pose_mat[1, 3],
-                    obstacle_pose_mat[2, 3],
-                )
-            )
-            reset_ori = self.april_coord_to_sim_coord(ori)
-            obstacle_pose.set_q(
-                np.roll(T.mat2quat(reset_ori[:3, :3]), shift=1, axis=-1).astype(
-                    np.float32
-                )
-            )
-        else:
-            obstacle_pose = self.obstacle_front_pose
-
-        # Write to GPU buffer. Since obstacles are static objects, no need to reset velocity
-        self._set_obstacle_positions(env_idx, obstacle_pose)
+        self._write_parts_state(env_idx, parts_poses, input_quat_wxyz=False)
         # Clear residual external wrench only for the target env.
         self._clear_rigid_body_wrenches(env_idx)
 
@@ -2208,11 +2161,8 @@ class FurnitureSimRLEnv(gym.Env):
     def get_jacobian_ee(self, qpos: torch.Tensor) -> torch.Tensor:
         # Pinocchio can only use loop to compute jacobian for multiple envs
         # jacobian_ee = self.franka_pinocchio_model.compute_single_link_local_jacobian(qpos=qpos.cpu().numpy(), index=self.ee_link_index)
-        jacobian_ee = torch.zeros(
-            (self.num_envs, 6, self.franka_num_dof),
-            dtype=torch.float32,
-            device=self.device,
-        )
+        jacobian_ee = self._jacobian_ee_buffer
+        jacobian_ee.zero_()
         jacobian_ee[:, :, :7] = self.franka_ee_chain.jacobian(
             qpos[:, :7]
         )  # last 2 dim is for gripper
@@ -2227,11 +2177,9 @@ class FurnitureSimRLEnv(gym.Env):
         # forces applied at the end of step T are re-applied at step T+1 by the gpu_apply calls,
         # effectively doubling the force magnitude.
         if sample_perturbations:
-            force_buf = self.physx_system.cuda_rigid_body_force.torch()
-            torque_buf = self.physx_system.cuda_rigid_body_torque.torch()
             all_part_indices = self.parts_gpu_index_tensor.view(-1)
-            force_buf[all_part_indices, :3] = 0
-            torque_buf[all_part_indices, :3] = 0
+            self._cuda_rigid_body_force[all_part_indices, :3] = 0
+            self._cuda_rigid_body_torque[all_part_indices, :3] = 0
             # Apply zeroed forces so PhysX sees them before stepping.
             self.physx_system.gpu_apply_rigid_dynamic_force()
             self.physx_system.gpu_apply_rigid_dynamic_torque()
@@ -2320,12 +2268,10 @@ class FurnitureSimRLEnv(gym.Env):
             # Real part is the last element in the quaternion.
             action_quat_xyzw = action[:, 3:7]
             quat_norm = torch.linalg.norm(action_quat_xyzw, dim=-1, keepdim=True)
-            identity_quat = torch.zeros_like(action_quat_xyzw)
-            identity_quat[:, -1] = 1.0
             action_quat_xyzw = torch.where(
                 quat_norm > 1e-6,
                 action_quat_xyzw / quat_norm,
-                identity_quat,
+                self._identity_quat_xyzw,
             )
 
         elif self.__act_rot_repr == 1:
@@ -2342,16 +2288,16 @@ class FurnitureSimRLEnv(gym.Env):
 
         # Delta Control
         if self.__action_type == 1:
-            goal_pose = ee_pose.clone()
+            goal_pose = self._update_goal_pose_buffer
+            goal_pose.copy_(ee_pose)
             goal_pose[:, :3] += action[:, :3]
             goal_pose[:, 3:] = C.quaternion_multiply(
                 goal_pose[:, 3:].roll(-1, dims=-1), action_quat_xyzw
             ).roll(1, dims=-1)
         # Absolute Control
         elif self.__action_type == 0:
-            goal_pose = torch.zeros(
-                (self.num_envs, 7), dtype=torch.float32, device=self.device
-            )
+            goal_pose = self._update_goal_pose_buffer
+            goal_pose.zero_()
             goal_pose[:, :3] = action[:, :3]
             goal_pose[:, 3:7] = action_quat_xyzw.roll(1, dims=-1)
 
@@ -2373,19 +2319,10 @@ class FurnitureSimRLEnv(gym.Env):
 
         # SAPIEN uses wxyz, diffik uses xyzw
         self.step_ctrl.set_goal(goal_pose[:, :3], goal_pose[:, 3:7].roll(-1, dims=-1))
-        target_qpos = torch.zeros(
-            (self.num_envs, self.franka_num_dof),
-            dtype=torch.float32,
-            device=self.device,
-        )
-        target_qf = torch.zeros(
-            (self.num_envs, self.franka_num_dof),
-            dtype=torch.float32,
-            device=self.device,
-        )
-        gripper_action = torch.zeros(
-            (self.num_envs, 1), dtype=torch.float32, device=self.device
-        )
+        target_qpos = self._update_target_qpos_buffer
+        target_qpos.zero_()
+        target_qf = self._update_target_qf_buffer
+        target_qf.zero_()
 
         grasp = action[:, -1]
 
@@ -2395,17 +2332,16 @@ class FurnitureSimRLEnv(gym.Env):
             & (torch.abs(grasp) > self.grasp_margin),
             torch.where(
                 grasp < 0,
-                self.max_gripper_width,
-                torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+                self._open_gripper_width_buffer,
+                self._closed_gripper_width_buffer,
             ),
             torch.where(
                 self.last_grasp < 0,
-                self.max_gripper_width,
-                torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+                self._open_gripper_width_buffer,
+                self._closed_gripper_width_buffer,
             ),
         )
         self.last_grasp = grasp
-        gripper_action[:, -1] = grip_sep
         qpos = self.get_qpos()
 
         self.jacobian_ee = self.get_jacobian_ee(qpos)
@@ -2439,7 +2375,7 @@ class FurnitureSimRLEnv(gym.Env):
         target_qpos[:, 7:9] = torch.where(
             gripper_action_mask,
             self.max_gripper_width / 2,
-            torch.zeros_like(target_qpos[:, 7:9]),
+            0.0,
         )  # No use since it is qf control
         # print(target_qpos.cpu().numpy())
 
@@ -2451,19 +2387,15 @@ class FurnitureSimRLEnv(gym.Env):
         # In practice, franka_gpu_index can be any permutation (e.g. [3,7,11,...]) depending on
         # the scene construction order, so the full-buffer write sends each env's action to the
         # wrong robot.
-        self.physx_system.cuda_articulation_qf.torch()[
-            self.franka_gpu_index, : self.franka_num_dof
-        ] = target_qf
-        self.physx_system.cuda_articulation_target_qpos.torch()[
+        self._cuda_articulation_qf[self.franka_gpu_index, : self.franka_num_dof] = (
+            target_qf
+        )
+        self._cuda_articulation_target_qpos[
             self.franka_gpu_index, : self.franka_num_dof
         ] = target_qpos
-        self.physx_system.cuda_articulation_target_qvel.torch()[
+        self._cuda_articulation_target_qvel[
             self.franka_gpu_index, : self.franka_num_dof
-        ] = torch.zeros(
-            (self.num_envs, self.franka_num_dof),
-            dtype=torch.float32,
-            device=self.device,
-        )
+        ] = 0
 
     def update_render(self) -> None:
         # NOTE: Only with RenderSystemGroup, GPU Render can directly access physics info from GPU
@@ -2624,11 +2556,10 @@ class FurnitureSimRLEnv(gym.Env):
         all_part_indices = self.parts_gpu_index_tensor.view(-1)
         selected_indices = all_part_indices[selected_part_mask]
 
-        force_buf = self.physx_system.cuda_rigid_body_force.torch()
-        torque_buf = self.physx_system.cuda_rigid_body_torque.torch()
-
-        force_buf[selected_indices, :3] = forces[selected_part_mask]
-        torque_buf[selected_indices, :3] = torques[selected_part_mask]
+        self._cuda_rigid_body_force[selected_indices, :3] = forces[selected_part_mask]
+        self._cuda_rigid_body_torque[selected_indices, :3] = torques[
+            selected_part_mask
+        ]
 
         # Explicit apply needed here because this function runs after physx_system.step();
         # _apply_all() in the next step() call is too late for these forces.
@@ -2636,8 +2567,9 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_apply_rigid_dynamic_torque()
 
     def gripper_width(self) -> torch.Tensor:
-        qpos = self.physx_system.cuda_articulation_qpos.torch()
-        return qpos[self.franka_gpu_index, 7:8] + qpos[self.franka_gpu_index, 8:9]
+        return self._cuda_articulation_qpos[
+            self.franka_gpu_index, 7:8
+        ] + self._cuda_articulation_qpos[self.franka_gpu_index, 8:9]
 
     def sim_pose_to_april_pose(self, parts_poses: torch.Tensor) -> torch.Tensor:
         part_poses_mat = C.pose2mat_batched(
@@ -2724,7 +2656,7 @@ class FurnitureSimRLEnv(gym.Env):
 
     @property
     def rb_states(self) -> torch.Tensor:
-        rb_states = self.physx_system.cuda_rigid_body_data.torch().clone()
+        rb_states = self._cuda_rigid_body_data.clone()
         rb_states[..., 3:7] = rb_states[..., 3:7].roll(-1, dims=-1)
         return rb_states
 
@@ -2799,6 +2731,19 @@ class FurnitureSimRLEnv(gym.Env):
             self.sensor_groups = {}
         if hasattr(self, "sensors"):
             self.sensors = {}
+        for attr in (
+            "_cuda_rigid_body_data",
+            "_cuda_rigid_body_force",
+            "_cuda_rigid_body_torque",
+            "_cuda_articulation_qpos",
+            "_cuda_articulation_qvel",
+            "_cuda_articulation_qf",
+            "_cuda_articulation_target_qpos",
+            "_cuda_articulation_target_qvel",
+            "_cuda_articulation_link_data",
+        ):
+            if hasattr(self, attr):
+                setattr(self, attr, None)
 
     def __del__(self) -> None:
         self.close()
@@ -2870,11 +2815,9 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
         self, action: torch.Tensor, sample_perturbations: bool = False
     ) -> tuple[EnvObservation, torch.Tensor, torch.Tensor, torch.Tensor, StepInfo]:
         if sample_perturbations:
-            force_buf = self.physx_system.cuda_rigid_body_force.torch()
-            torque_buf = self.physx_system.cuda_rigid_body_torque.torch()
             all_part_indices = self.parts_gpu_index_tensor.view(-1)
-            force_buf[all_part_indices, :3] = 0
-            torque_buf[all_part_indices, :3] = 0
+            self._cuda_rigid_body_force[all_part_indices, :3] = 0
+            self._cuda_rigid_body_torque[all_part_indices, :3] = 0
             self.physx_system.gpu_apply_rigid_dynamic_force()
             self.physx_system.gpu_apply_rigid_dynamic_torque()
         self.update_action(action)
