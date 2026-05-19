@@ -2005,6 +2005,8 @@ config: Dict[str, Any] = {
                 "ids": [0],
                 "reset_pos": [[0.4, -0.175, 0.0025]],
                 "reset_ori": [rot_mat(np.array([np.pi / 2, 0, np.pi / 2]), hom=True)],
+                "reset_x_len": 0.14,
+                "reset_y_len": 0.14,
             },
             "mug": {
                 "name": "mug",
@@ -2012,6 +2014,8 @@ config: Dict[str, Any] = {
                 "ids": [0],
                 "reset_pos": [[0.4, 0.175, 0.0025]],
                 "reset_ori": [rot_mat(np.array([np.pi / 2, 0, 0]), hom=True)],
+                "reset_x_len": 0.10,
+                "reset_y_len": 0.10,
             },
             "tag_size": 0.0195,
             "assembly_json_fname": "furniture/scans/json/mug_rack/assembly.json",
