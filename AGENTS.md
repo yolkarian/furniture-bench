@@ -8,7 +8,7 @@ Based on the answer, read the relevant files in parallel:
 - data pipeline / trajectories: `furniture_bench/data/`, `furniture_bench/scripts/preprocess_data.py`, `furniture_bench/scripts/show_trajectory.py`, `furniture_bench/scripts/tests/test_skill_preprocess.py`, `scripts/replay.py`
 - teleop / hardware / cameras: `furniture_bench/device/`, `furniture_bench/robot/`, `furniture_bench/scripts/calibration.py`, `furniture_bench/scripts/reset.py`, `furniture_bench/scripts/run_cam_april.py`, `furniture_bench/scripts/move_up.py`
 - furniture/task definitions or asset wiring: `furniture_bench/furniture/`, `furniture_bench/config.py`, then the smallest relevant slice under `furniture_bench/assets/` or `furniture_bench/assets_no_tags/`
-- Docker or launch flows: `docker/`, `scripts/entrypoint.sh`, `scripts/launch_client.sh`, `scripts/launch_server.sh`, `scripts/launch_daemon.sh`
+- Docker or launch flows: `docker/`, `scripts/import_furniture_bench.py`, `scripts/import_franka_sapien.py`, `scripts/launch_sim_gymasium.py`
 
 If the request is already concrete, skip generic discovery and go straight to the relevant module and docs.
 
@@ -48,18 +48,18 @@ If the request is already concrete, skip generic discovery and go straight to th
 - When changing simulation scaling or memory capacity logic, keep `GPUMemoryConfig` dynamic: define base capacities in `furniture_bench/sim_config.py`, scale from `num_envs`, round up to the next power of two, and instantiate config per environment instead of patching a shared global in place.
 
 ## Commands
-- Setup: `conda env create -f environment.yml && conda activate furniture-bench`
-- Alternative setup (inside an existing Python 3.11 environment): `pip install -e .`
-- Compatibility setup: `bash scripts/install_model_deps.sh`
-- Cheap syntax check after Python changes: `python -m compileall furniture_bench scripts`
-- Shell syntax check after bash script changes: `bash -n scripts/entrypoint.sh scripts/install_model_deps.sh scripts/launch_client.sh scripts/launch_daemon.sh scripts/launch_server.sh`
-- Maintained smoke tests: `python -m unittest furniture_bench.scripts.tests.test_skill_preprocess`
-- CLI checks for touched maintained entry points: `python -m furniture_bench.scripts.run_sim_env --help`, `python -m furniture_bench.scripts.collect_data --help`, `python -m furniture_bench.scripts.collect_data_sm --help`, `python -m furniture_bench.scripts.download_dataset --help`, `python -m furniture_bench.scripts.preprocess_data --help`, `python -m furniture_bench.scripts.show_trajectory --help`, `python scripts/replay.py --help`
-- Only run a headless simulator smoke test when the change actually needs runtime coverage and the environment has the required simulator dependencies: `python -m furniture_bench.scripts.run_sim_env --furniture one_leg --scripted --headless`
+- Setup: `uv sync --locked`
+- Run commands in the project environment: `uv run <command>`
+- Cheap syntax check after Python changes: `uv run python -m compileall furniture_bench scripts`
+- Shell syntax check after bash script changes: `bash -n docker/build.sh docker/run.sh docker/entrypoint.sh`
+- Maintained smoke tests: `uv run python -m unittest furniture_bench.scripts.tests.test_skill_preprocess`
+- CLI checks for touched maintained entry points: `uv run python -m furniture_bench.scripts.run_sim_env --help`, `uv run python -m furniture_bench.scripts.collect_data --help`, `uv run python -m furniture_bench.scripts.collect_data_sm --help`, `uv run python -m furniture_bench.scripts.download_dataset --help`, `uv run python -m furniture_bench.scripts.preprocess_data --help`, `uv run python -m furniture_bench.scripts.show_trajectory --help`, `uv run python scripts/replay.py --help`
+- Container checks after Docker changes: `bash docker/build.sh --help`, `bash docker/run.sh --help`
+- Only run a headless simulator smoke test when the change actually needs runtime coverage and the environment has the required simulator dependencies: `uv run python -m furniture_bench.scripts.run_sim_env --furniture one_leg --scripted --headless`
 - Prefer the maintained smoke test over real dataset downloads; `download_dataset.py` shells out to `gdown`, `rclone`, and `tar`.
 - This verification baseline does not replace hardware or end-to-end integration testing.
 
 ## Do Not Run By Default
 - Do not run interactive hardware or camera flows unless the user explicitly asks and the required devices are available: `furniture_bench.scripts.calibration`, `furniture_bench.scripts.run_cam_april`, `furniture_bench.scripts.reset`, `furniture_bench.scripts.move_up`, real-world collection modes
-- Do not start Docker launch scripts or tmux hardware sessions unless requested: `scripts/launch_client.sh`, `scripts/launch_server.sh`, `scripts/launch_daemon.sh`
+- Do not start Docker containers or hardware sessions unless requested; `docker/run.sh` may start an interactive or detached container, and real-world collection modes require devices.
 - Do not edit giant mesh, image, or binary assets (`.obj`, `.dae`, `.stl`, `.usd`, large `.png` / `.jpg`) unless the task is explicitly about assets

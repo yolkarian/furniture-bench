@@ -14,16 +14,18 @@ The following controller modules were removed:
 
 ## 2. Structural changes
 
-### 2.1 Shell scripts moved into `scripts/`
+### 2.1 Environment and helper cleanup
 
-The substantive shell scripts now live under `scripts/`:
-- `scripts/install_model_deps.sh`
-- `scripts/entrypoint.sh`
-- `scripts/launch_client.sh`
-- `scripts/launch_server.sh`
-- `scripts/launch_daemon.sh`
+The project environment is now managed by uv:
+- dependency declarations live in `pyproject.toml`
+- reproducibility lives in `uv.lock`
+- the project runtime lives in `.venv/`
 
-The old duplicated shell files were removed from the repository root.
+Maintained container helpers live under `docker/`:
+- `docker/build.sh`
+- `docker/run.sh`
+
+The old duplicated shell files and conda environment manifest were removed from the repository.
 
 ### 2.2 Controller cleanup
 
@@ -70,6 +72,8 @@ After cleanup:
 ## 4. Recommended replacements
 
 Use these replacements for removed workflows:
+- environment setup: `uv sync --locked`
+- running project commands: `uv run <command>`
+- containers: `bash docker/build.sh` and `bash docker/run.sh`
 - offline RL code: keep it in a separate repository or optional integration
-- vendored wheel installs: install `dt-apriltags` from package management during environment setup
-- historical shell helpers: call the maintained files under `scripts/`
+- vendored wheel installs: declare package dependencies in `pyproject.toml` and let uv resolve them

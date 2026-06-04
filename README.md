@@ -18,21 +18,21 @@ This repository now centers on:
 Python requirement:
 - Python `3.11` only
 
-The recommended way to set up the environment is with conda (or mamba):
+The recommended setup uses uv:
 
 ```bash
-conda env create -f environment.yml
-conda activate furniture-bench
+uv sync --locked
 ```
 
-This creates a conda environment named `furniture-bench` with all dependencies
-(including CUDA, PyTorch, and gymnasium 0.29.1) and installs the package in
-editable mode.
+This creates a project-local `.venv` from `pyproject.toml` and `uv.lock`.
+The locked GPU stack uses PyTorch `2.7.1+cu128` and CUDA `12.8` runtime
+wheels. Run commands with `uv run ...`, or activate `.venv` explicitly.
 
-Alternatively, inside an existing Python 3.11 environment:
+Build and run the SAPIEN container with the same uv-managed project:
 
 ```bash
-pip install -e .
+bash docker/build.sh
+bash docker/run.sh --gpu all
 ```
 
 ### 2. Run the simulator

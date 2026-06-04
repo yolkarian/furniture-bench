@@ -3,85 +3,105 @@ set -euo pipefail
 
 IMAGE_NAME="furniture-bench-sapien"
 IMAGE_TAG="latest"
-GPU_FLAG="--gpus all --runtime=nvidia"
+VENV_VOLUME="furniture-bench-sapien-venv"
+GPU_ARGS=(--gpus all)
 EXTRA_VOLUMES=()
-DEV_MOUNT=false
 DETACHED=false
-DETACH_CMD=""
+DETACH_CMD=()
+COMMAND=()
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [OPTIONS] [MOUNT_DIR ...]
+Usage: $(basename "$0") [OPTIONS] [MOUNT_DIR ...] [-- COMMAND [ARG ...]]
 
-Launch an interactive shell inside the furniture-bench SAPIEN container.
+Run the furniture-bench SAPIEN container. The repository is mounted at
+/workspace, /workspace/.venv is backed by a Docker volume, and the container
+entrypoint runs uv sync --locked before launching the command.
 
-The container is started with GPU access (--gpus all) by default, X11
-forwarding for SAPIEN rendering, and is automatically removed on exit.
-
-Positional arguments are host directories to mount into /workspace/:
-  $(basename "$0") /data/trajectories /data/checkpoints
-  mounts as /workspace/trajectories and /workspace/checkpoints
+Positional MOUNT_DIR arguments are host directories mounted into
+/workspace/<basename>.
 
 Options:
-  -n, --name NAME      Image name  (default: ${IMAGE_NAME})
-  -t, --tag TAG        Image tag   (default: ${IMAGE_TAG})
-  -v, --volume SRC:DST Bind-mount with explicit container path (repeatable)
-      --gpu DEVICES    Limit visible GPUs (e.g. 0 or 0,1). Default: all
-      --cpu            Run without GPU (omit --gpus flag)
-      --dev            Mount host project source over /root/furniture-bench
-                       for live editing inside the container
-  -d, --detach CMD     Run CMD in the background (detached mode).
-                       The container keeps running after the script exits.
-                       Use 'docker logs <id>' to follow output.
-  -h, --help           Show this help message and exit
+  -n, --name NAME        Image name (default: ${IMAGE_NAME})
+  -t, --tag TAG          Image tag  (default: ${IMAGE_TAG})
+  -v, --volume SRC:DST   Bind-mount with explicit container path (repeatable)
+      --venv-volume NAME Docker volume for /workspace/.venv
+                          (default: ${VENV_VOLUME})
+      --gpu DEVICES      Use all GPUs or selected GPUs (all, 0, 0,1). Default: all
+      --cpu              Run without GPU access
+  -d, --detach CMD       Run CMD in the background
+  -h, --help             Show this help message and exit
 
 Examples:
-  $(basename "$0")                              # interactive shell, all GPUs
-  $(basename "$0") --gpu 0                      # single GPU
-  $(basename "$0") --gpu 0,1                    # two GPUs
-  $(basename "$0") --cpu                        # CPU only
-  $(basename "$0") --dev                        # live-edit host source
-  $(basename "$0") /data/trajectories           # mount into /workspace/trajectories
-  $(basename "$0") -v /data:/mnt/data           # explicit mount path
-
-  # Mount a training project and run a script in the background
-  $(basename "$0") --gpu 0 -d "python /workspace/my_project/train.py" ~/my_project
-
-  # Detached training with dev source and extra data
-  $(basename "$0") --dev --gpu 0,1 \\
-      -d "python /workspace/my_project/train.py --epochs 100" \\
-      ~/my_project /data/datasets
+  $(basename "$0")                                  # interactive shell, all GPUs
+  $(basename "$0") --gpu 0                          # interactive shell, GPU 0
+  $(basename "$0") --cpu -- python --version        # CPU command smoke test
+  $(basename "$0") /data/trajectories               # mount data directory
+  $(basename "$0") --gpu 0 -d "python train.py"     # detached command
 EOF
 }
 
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -n|--name)    IMAGE_NAME="$2"; shift 2 ;;
-        -t|--tag)     IMAGE_TAG="$2";  shift 2 ;;
-        -v|--volume)  EXTRA_VOLUMES+=("-v" "$2"); shift 2 ;;
-        --gpu)        GPU_FLAG="--gpus device=$2 --runtime=nvidia"; shift 2 ;;
-        --cpu)        GPU_FLAG=""; shift ;;
-        --dev)        DEV_MOUNT=true; shift ;;
-        -d|--detach)  DETACHED=true; DETACH_CMD="$2"; shift 2 ;;
-        -h|--help)    usage; exit 0 ;;
-        -*)           echo "Error: unknown option '$1'" >&2; usage >&2; exit 1 ;;
-        *)            POSITIONAL+=("$1"); shift ;;
+        -n|--name)
+            IMAGE_NAME="$2"
+            shift 2
+            ;;
+        -t|--tag)
+            IMAGE_TAG="$2"
+            shift 2
+            ;;
+        -v|--volume)
+            EXTRA_VOLUMES+=("-v" "$2")
+            shift 2
+            ;;
+        --venv-volume)
+            VENV_VOLUME="$2"
+            shift 2
+            ;;
+        --gpu)
+            if [[ "$2" == "all" ]]; then
+                GPU_ARGS=(--gpus all)
+            else
+                GPU_ARGS=(--gpus "device=$2")
+            fi
+            shift 2
+            ;;
+        --cpu)
+            GPU_ARGS=()
+            shift
+            ;;
+        -d|--detach)
+            DETACHED=true
+            DETACH_CMD=(bash -lc "$2")
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            COMMAND=("$@")
+            break
+            ;;
+        -*)
+            echo "Error: unknown option '$1'" >&2
+            usage >&2
+            exit 1
+            ;;
+        *)
+            POSITIONAL+=("$1")
+            shift
+            ;;
     esac
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# --dev: bind-mount host project for live editing
-SOURCE_MOUNT=()
-if [[ "${DEV_MOUNT}" == true ]]; then
-    echo "==> Dev mode: mounting ${PROJECT_ROOT} -> /root/furniture-bench"
-    SOURCE_MOUNT=(-v "${PROJECT_ROOT}:/root/furniture-bench")
-fi
-
-# Positional args: mount each dir into /workspace/<basename>
-WORKSPACE_MOUNTS=()
+WORKSPACE_MOUNTS=(-v "${PROJECT_ROOT}:/workspace" -v "${VENV_VOLUME}:/workspace/.venv")
 for dir in "${POSITIONAL[@]+"${POSITIONAL[@]}"}"; do
     dir="$(realpath "${dir}")"
     if [[ ! -d "${dir}" ]]; then
@@ -93,7 +113,6 @@ for dir in "${POSITIONAL[@]+"${POSITIONAL[@]}"}"; do
     WORKSPACE_MOUNTS+=(-v "${dir}:/workspace/${basename}")
 done
 
-# X11 forwarding for SAPIEN rendering (interactive only)
 X11_FLAGS=()
 if [[ "${DETACHED}" == false ]] && [[ -n "${DISPLAY:-}" ]]; then
     X11_FLAGS=(
@@ -103,36 +122,51 @@ if [[ "${DETACHED}" == false ]] && [[ -n "${DISPLAY:-}" ]]; then
 fi
 
 ENV_FLAGS=()
-if [[ -z "${GPU_FLAG}" ]]; then
+if [[ ${#GPU_ARGS[@]} -eq 0 ]]; then
     ENV_FLAGS=(-e NVIDIA_VISIBLE_DEVICES=void)
 fi
 
+RUN_COMMAND=("${COMMAND[@]+"${COMMAND[@]}"}")
+RUN_MODE=(--rm)
+if [[ ${#RUN_COMMAND[@]} -eq 0 && -t 0 && -t 1 ]]; then
+    RUN_MODE=(--rm -it)
+fi
 if [[ "${DETACHED}" == true ]]; then
-    echo "==> Starting ${IMAGE_NAME}:${IMAGE_TAG} (detached)"
-    echo "==> Command: ${DETACH_CMD}"
+    RUN_MODE=(--rm -d)
+    if [[ ${#DETACH_CMD[@]} -gt 0 ]]; then
+        RUN_COMMAND=("${DETACH_CMD[@]}")
+    fi
+    if [[ ${#RUN_COMMAND[@]} -eq 0 ]]; then
+        echo "Error: detached mode requires a command" >&2
+        exit 1
+    fi
+fi
 
-    CID=$(docker run --rm -d \
-        ${GPU_FLAG} \
-        "${SOURCE_MOUNT[@]+"${SOURCE_MOUNT[@]}"}" \
-        "${WORKSPACE_MOUNTS[@]+"${WORKSPACE_MOUNTS[@]}"}" \
+echo "==> Starting ${IMAGE_NAME}:${IMAGE_TAG}"
+echo "==> Mounting ${PROJECT_ROOT} -> /workspace"
+echo "==> Using ${VENV_VOLUME} -> /workspace/.venv"
+
+if [[ "${DETACHED}" == true ]]; then
+    CID=$(docker run \
+        "${RUN_MODE[@]}" \
+        "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
+        "${WORKSPACE_MOUNTS[@]}" \
         "${ENV_FLAGS[@]+"${ENV_FLAGS[@]}"}" \
         "${EXTRA_VOLUMES[@]+"${EXTRA_VOLUMES[@]}"}" \
         "${IMAGE_NAME}:${IMAGE_TAG}" \
-        bash -lc "${DETACH_CMD}")
+        "${RUN_COMMAND[@]}")
 
     echo "==> Container: ${CID:0:12}"
     echo "==> Follow logs:  docker logs -f ${CID:0:12}"
     echo "==> Stop:         docker stop ${CID:0:12}"
 else
-    echo "==> Starting ${IMAGE_NAME}:${IMAGE_TAG}"
-
-    docker run --rm -it \
-        ${GPU_FLAG} \
-        "${SOURCE_MOUNT[@]+"${SOURCE_MOUNT[@]}"}" \
-        "${WORKSPACE_MOUNTS[@]+"${WORKSPACE_MOUNTS[@]}"}" \
+    docker run \
+        "${RUN_MODE[@]}" \
+        "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
+        "${WORKSPACE_MOUNTS[@]}" \
         "${X11_FLAGS[@]+"${X11_FLAGS[@]}"}" \
         "${ENV_FLAGS[@]+"${ENV_FLAGS[@]}"}" \
         "${EXTRA_VOLUMES[@]+"${EXTRA_VOLUMES[@]}"}" \
         "${IMAGE_NAME}:${IMAGE_TAG}" \
-        bash
+        "${RUN_COMMAND[@]+"${RUN_COMMAND[@]}"}"
 fi

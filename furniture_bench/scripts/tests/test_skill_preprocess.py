@@ -223,7 +223,6 @@ class MaintainedScriptSmokeTests(unittest.TestCase):
         self.assert_script_help("import_furniture_bench.py")
         self.assert_script_help("import_franka_sapien.py")
         self.assert_script_help("launch_sim_gymasium.py")
-        self.assert_script_help("parallel_rendering_test.py")
 
 
 if __name__ == "__main__":

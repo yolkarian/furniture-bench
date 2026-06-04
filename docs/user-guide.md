@@ -9,30 +9,27 @@ The project uses `gymnasium==0.29.1` and SAPIEN for physics simulation.
 
 ## 2. Installation
 
-The recommended setup uses conda (or mamba) with the provided environment file:
+The recommended setup uses uv:
 
 ```bash
-conda env create -f environment.yml
-conda activate furniture-bench
+uv sync --locked
 ```
 
-This creates a conda environment named `furniture-bench` with all dependencies
-(including CUDA, PyTorch, and gymnasium 0.29.1) and installs the package in
-editable mode.
+This creates a project-local `.venv` from `pyproject.toml` and `uv.lock`.
+The locked simulator stack uses PyTorch `2.7.1+cu128` and CUDA `12.8` runtime
+wheels through the `pytorch-cu128` uv index.
 
-Alternatively, inside an existing Python 3.11 environment:
+Run commands through uv:
 
 ```bash
-pip install -e .
+uv run python -m furniture_bench.scripts.run_sim_env --help
 ```
 
-Or use the compatibility helper script:
+Or activate the environment explicitly:
 
 ```bash
-bash scripts/install_model_deps.sh
+source .venv/bin/activate
 ```
-
-The helper script creates or updates the conda environment from `environment.yml`.
 
 ## 3. Supported workflows
 
@@ -201,18 +198,15 @@ Common options:
 
 ## 9. Shell helpers
 
-The maintained top-level helper scripts live under `scripts/`:
-- `scripts/install_model_deps.sh`
-- `scripts/entrypoint.sh`
-- `scripts/launch_client.sh`
-- `scripts/launch_server.sh`
-- `scripts/launch_daemon.sh`
-
-Additional diagnostic Python helpers live under `scripts/` as well:
+The maintained top-level helper entry points live under `scripts/`:
+- `scripts/replay.py`
 - `scripts/import_furniture_bench.py`
 - `scripts/import_franka_sapien.py`
 - `scripts/launch_sim_gymasium.py`
-- `scripts/parallel_rendering_test.py`
+
+Container helpers live under `docker/`:
+- `docker/build.sh`
+- `docker/run.sh`
 
 ## 10. Removed workflows
 

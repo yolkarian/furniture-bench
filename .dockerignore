@@ -2,6 +2,7 @@
 .kilo
 __pycache__
 *.pyc
+.venv
 *.egg-info
 .mypy_cache
 .pytest_cache
