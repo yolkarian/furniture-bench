@@ -227,7 +227,7 @@ requires-dist = [
     { name = "pytorch-kinematics", specifier = ">=0.7.5" },
     { name = "rich" },
     { name = "safetensors" },
-    { name = "sapien", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/yolkarian/SAPIEN/releases/download/nightly/sapien-3.0.0.dev20260407+bed4e4b5-cp311-cp311-manylinux_2_28_x86_64.whl" },
+    { name = "sapien", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.1/sapien-3.0.0+fork.1-cp311-cp311-manylinux_2_28_x86_64.whl" },
     { name = "scikit-image" },
     { name = "scipy", specifier = "==1.15.2" },
     { name = "spnav" },
@@ -765,8 +765,8 @@ wheels = [
 
 [[package]]
 name = "sapien"
-version = "3.0.0.dev20260407+bed4e4b5"
-source = { url = "https://github.com/yolkarian/SAPIEN/releases/download/nightly/sapien-3.0.0.dev20260407+bed4e4b5-cp311-cp311-manylinux_2_28_x86_64.whl" }
+version = "3.0.0+fork.1"
+source = { url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.1/sapien-3.0.0+fork.1-cp311-cp311-manylinux_2_28_x86_64.whl" }
 dependencies = [
     { name = "lxml", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "networkx", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -777,7 +777,7 @@ dependencies = [
     { name = "transforms3d", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/yolkarian/SAPIEN/releases/download/nightly/sapien-3.0.0.dev20260407+bed4e4b5-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:e972442bce6be607a1e69b7448f4f4b5c962cca301d7d52ef59183bf2af7da82" },
+    { url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.1/sapien-3.0.0+fork.1-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:22c753d95a7d02af21271f36ab22fec57c086b02db803cfcc18cdf45f5a01bc5" },
 ]
 
 [package.metadata]
