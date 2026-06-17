@@ -23,7 +23,7 @@ dependencies = [
     "lxml",
     "networkx",
     "numba",
-    "numpy>=1.26,<2.0",
+    "numpy==2.0.2",
     "opencv-python",
     "pynput==1.7.7",
     "pyrealsense2",
@@ -34,7 +34,7 @@ dependencies = [
     "scikit-image",
     "scipy==1.15.2",
     "spnav",
-    "torch==2.7.1",
+    "torch==2.8.0",
     "tqdm",
     "trimesh",
 ]
@@ -45,7 +45,7 @@ environments = [
 ]
 
 [tool.uv.sources]
-sapien = { url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.1/sapien-3.0.0+fork.1-cp311-cp311-manylinux_2_28_x86_64.whl" }
+sapien = { url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.4/sapien-3.0.0+fork.4-cp311-cp311-manylinux_2_28_x86_64.whl" }
 torch = [
     { index = "pytorch-cu128" },
 ]
