@@ -131,6 +131,7 @@ class FurnitureSimRLEnv(gym.Env):
         self.randomness = str_to_enum(randomness)
         self.headless = headless
         self.enable_sensor = enable_sensor
+        self._rendering_enabled = enable_sensor or not headless
         self.parallel_in_single_scene = parallel_in_single_scene
         self.manual_done = manual_done
         self.init_assembled: bool = (
@@ -489,13 +490,16 @@ class FurnitureSimRLEnv(gym.Env):
         self._create_ground_builder()
         self._create_franka_builder()
         self._create_part_builders()
+        if not self._rendering_enabled:
+            self._clear_builder_visuals()
 
         # load Scene configs
         self.physx_system.set_timestep(sim_params.dt)
         self.dt = sim_params.dt
 
         self._create_scenes()
-        self._add_light()
+        if self._rendering_enabled:
+            self._add_light()
 
         # initializing Physx simulation scene on GPU (Load/Reset all qpos to the default qpos)
         self._init_sim()
@@ -600,14 +604,18 @@ class FurnitureSimRLEnv(gym.Env):
             sapien.Pose(p=[0, 0, 0], q=[0.7071068, 0, -0.7071068, 0])
         )
         self.ground_builder.set_initial_pose(sapien.Pose(p=[0, 0, 0]))
-        self.ground_builder.add_plane_visual(
-            sapien.Pose(p=[0, 0, 0], q=[0.7071068, 0, -0.7071068, 0]),
-            [10, 10, 10],
-            sapien.render.RenderMaterial(
-                base_color=[1, 1, 1, 1], specular=0.3, roughness=0.5, metallic=0.0
-            ),
-            "ground_visual",
-        )
+        if self._rendering_enabled:
+            self.ground_builder.add_plane_visual(
+                sapien.Pose(p=[0, 0, 0], q=[0.7071068, 0, -0.7071068, 0]),
+                [10, 10, 10],
+                sapien.render.RenderMaterial(
+                    base_color=[1, 1, 1, 1],
+                    specular=0.3,
+                    roughness=0.5,
+                    metallic=0.0,
+                ),
+                "ground_visual",
+            )
 
     def _create_franka_builder(self) -> None:
         urdf_file = "franka_description_ros/franka_description/robots/franka_panda.urdf"
@@ -676,6 +684,21 @@ class FurnitureSimRLEnv(gym.Env):
                 )
         self.urdf_loader.load_nonconvex_collisions_from_file = False
 
+    def _clear_builder_visuals(self) -> None:
+        self.ground_builder.visual_records.clear()
+        for builder in self.static_obj_builders.values():
+            builder.visual_records.clear()
+        for builder in self.part_builders.values():
+            builder.visual_records.clear()
+        for link_builder in self.frank_builder.link_builders:
+            link_builder.visual_records.clear()
+
+    def _scene_systems(self) -> list[Any]:
+        systems = [self.physx_system]
+        if self._rendering_enabled:
+            systems.append(sapien.render.RenderSystem(self.sapien_device))
+        return systems
+
     def _create_scenes(self) -> None:
         # %% Create Scenes
         self.scenes: List[sapien.Scene] = []
@@ -695,14 +718,7 @@ class FurnitureSimRLEnv(gym.Env):
         scene_grid_length = int(np.ceil(np.sqrt(self.num_envs)))
 
         if self.parallel_in_single_scene:
-            self.scenes.append(
-                sapien.Scene(
-                    systems=[
-                        self.physx_system,
-                        sapien.render.RenderSystem(self.sapien_device),
-                    ]  # cuda also for the rendering
-                )
-            )
+            self.scenes.append(sapien.Scene(systems=self._scene_systems()))
         for i in range(self.num_envs):
             scene_x, scene_y = (
                 i % scene_grid_length - scene_grid_length // 2,
@@ -720,12 +736,7 @@ class FurnitureSimRLEnv(gym.Env):
             if self.parallel_in_single_scene:
                 scene = self.scenes[0]
             else:
-                scene = sapien.Scene(
-                    systems=[
-                        self.physx_system,
-                        sapien.render.RenderSystem(self.sapien_device),
-                    ]  # cuda also for the rendering
-                )
+                scene = sapien.Scene(systems=self._scene_systems())
                 self.physx_system.set_scene_offset(
                     scene,
                     scene_offset,
