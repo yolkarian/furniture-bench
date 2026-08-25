@@ -22,8 +22,12 @@ class Part(ABC):
         self.name = part_config["name"]
         self.asset_file = part_config["asset_file"]
         self.tag_ids = part_config["ids"]
-        self.reset_pos = part_config["reset_pos"].copy()
-        self.reset_ori = part_config.get("reset_ori").copy()
+        # Keep the randomizable working poses independent from both the module-level
+        # config and the immutable per-part baseline. A shallow list copy shares the
+        # underlying NumPy arrays, so in-place randomization would otherwise drift
+        # global spawn centers across same-process multirun jobs.
+        self.reset_pos = copy.deepcopy(self.part_config["reset_pos"])
+        self.reset_ori = copy.deepcopy(self.part_config.get("reset_ori"))
         self.center_from_anchor = None  # should be set in subclass.
         self.rel_pose_from_center = {}  # should be set in subclass.
         self.reset_gripper_width = None  # should be set in subclass.

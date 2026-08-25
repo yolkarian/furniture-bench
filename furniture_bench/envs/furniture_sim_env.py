@@ -2719,29 +2719,30 @@ class FurnitureSimRLEnv(gym.Env):
     def close(self) -> None:
         if getattr(self, "_closed", False):
             return
-        self._closed = True
 
         viewer = getattr(self, "viewer", None)
         if viewer is not None:
-            try:
-                viewer.close()
-            except Exception:
-                pass
+            viewer.close()
         self.viewer = None
 
         recorder = getattr(self, "recorder", None)
         if recorder is not None:
-            try:
-                recorder.stop_recording()
-            except Exception:
-                pass
+            recorder.stop_recording()
         self.recorder = None
 
+        # RenderCameraGroup owns camera/image CUDA exports; RenderSystemGroup owns
+        # the camera groups and sealed body/light state. Close both before scenes.
+        for group in getattr(self, "sensor_groups", {}).values():
+            group.close()
+        self.sensor_groups = {}
+
+        render_group = getattr(self, "render_system_group", None)
+        if isinstance(render_group, sapien.render.RenderSystemGroup):
+            render_group.close()
         self.render_system_group = None
-        if hasattr(self, "sensor_groups"):
-            self.sensor_groups = {}
-        if hasattr(self, "sensors"):
-            self.sensors = {}
+
+        # Drop all DLPack-backed Torch views into PhysX-owned buffers before closing
+        # the producing system. PhysxGpuSystem.close() intentionally rejects live views.
         for attr in (
             "_cuda_rigid_body_data",
             "_cuda_rigid_body_force",
@@ -2756,8 +2757,55 @@ class FurnitureSimRLEnv(gym.Env):
             if hasattr(self, attr):
                 setattr(self, attr, None)
 
+        scenes = list(getattr(self, "scenes", []))
+        render_systems = []
+        seen_render_systems = set()
+        for scene in scenes:
+            try:
+                render_system = scene.render_system
+            except RuntimeError:
+                render_system = None
+            if render_system is not None and id(render_system) not in seen_render_systems:
+                seen_render_systems.add(id(render_system))
+                render_systems.append(render_system)
+
+        # Scene.close() unregisters PhysX/render components and detaches systems.
+        for scene in scenes:
+            scene.close()
+        self.scenes = []
+
+        # Release Python owners of detached actors/builders before global shutdown.
+        for attr in (
+            "franka_entities",
+            "part_entities",
+            "static_obj_entites",
+            "part_actors",
+            "part_builders",
+            "static_obj_builders",
+            "sensors",
+        ):
+            value = getattr(self, attr, None)
+            if hasattr(value, "clear"):
+                value.clear()
+        for attr in ("ground_builder", "frank_builder", "urdf_loader"):
+            if hasattr(self, attr):
+                setattr(self, attr, None)
+
+        for render_system in render_systems:
+            render_system.close()
+        physx_system = getattr(self, "physx_system", None)
+        if physx_system is not None:
+            physx_system.close()
+        self.physx_system = None
+        self._closed = True
+
     def __del__(self) -> None:
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            # Explicit close() is strict and reports lifecycle leaks; destructors must
+            # remain noexcept during interpreter shutdown or partial construction.
+            pass
 
 
 class FurnitureSimEnv(FurnitureSimRLEnv):

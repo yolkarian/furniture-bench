@@ -82,6 +82,10 @@ Important notes:
 - `GPUMemoryConfig` scales from `num_envs`.
 - The maintained controller path is DiffIK.
 - Some older CLIs still accept `osc`; it now acts only as a compatibility alias to DiffIK.
+- Long-lived launchers that run several jobs in one Python process must call
+  `env.close()` after each job and then `sapien.shutdown()`. Furniture part reset
+  poses are copied away from immutable task config, so reset randomization cannot
+  contaminate spawn centers used by later jobs.
 - If you are changing the SAPIEN simulator internals, read
   [Avoiding steady CPU memory growth in SAPIEN environments](sapien-memory.md)
   before modifying reset or controller hot paths.
