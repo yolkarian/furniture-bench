@@ -4,7 +4,7 @@ import sapien
 import sapien.physx
 import sapien.render
 import pytorch_kinematics as pk
-from furniture_bench.utils.sapien.urdf_loader import URDFLoader
+from sapien.wrapper.urdf_loader import URDFLoader
 from sapien.wrapper.urdf_exporter import export_kinematic_chain_urdf
 import sapien.utils.viewer.control_window
 from furniture_bench.utils.sapien import (
@@ -63,8 +63,8 @@ from furniture_bench.sim_config import (
     PhysxParams,
     CameraCfg,
 )
-from furniture_bench.utils.sapien.actor_builder import ActorBuilder
-from furniture_bench.utils.sapien.articulation_builder import ArticulationBuilder
+from sapien.wrapper.actor_builder import ActorBuilder
+from sapien.wrapper.articulation_builder import ArticulationBuilder
 
 ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets_no_tags")
 
@@ -646,7 +646,7 @@ class FurnitureSimRLEnv(gym.Env):
     def _create_part_builders(self) -> None:
         self.part_builders: Dict[str, ActorBuilder] = {}
         self.part_default_pose: Dict[str, np.ndarray] = {}
-        self.urdf_loader.load_nonconvex_collisions_from_file = (
+        self.urdf_loader.load_nonconvex_collision_from_file = (
             True  # Some meshes of parts are nonconvex
         )
 
@@ -682,7 +682,7 @@ class FurnitureSimRLEnv(gym.Env):
                     sim_config["parts"]["friction"],
                     self.restitution,
                 )
-        self.urdf_loader.load_nonconvex_collisions_from_file = False
+        self.urdf_loader.load_nonconvex_collision_from_file = False
 
     def _clear_builder_visuals(self) -> None:
         self.ground_builder.visual_records.clear()

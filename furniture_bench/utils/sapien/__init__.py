@@ -8,10 +8,11 @@ import scipy.spatial
 
 import sapien.wrapper.scene
 import sapien.wrapper.urdf_loader
-from sapien.wrapper.articulation_builder import ActorBuilder, ArticulationBuilder
+from sapien.wrapper.actor_builder import ActorBuilder
+from sapien.wrapper.articulation_builder import ArticulationBuilder
+from sapien.wrapper.urdf_loader import URDFLoader
 from sapien.render import RenderCameraComponent
 from furniture_bench.sim_config import SimParams, AssetOptions
-from .urdf_loader import URDFLoader
 from typing import List, Tuple, Union, Optional, Dict, Callable
 import torch
 

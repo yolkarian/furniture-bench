@@ -46,7 +46,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     import torch
     from scipy.spatial.transform import Rotation
 
-    from furniture_bench.utils.sapien.urdf_loader import URDFLoader
+    from sapien.wrapper.urdf_loader import URDFLoader
 
     asset_root = args.asset_root.resolve()
     asset_file = asset_root / "franka_description" / "robots" / "franka_panda.urdf"
