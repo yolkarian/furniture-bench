@@ -45,9 +45,53 @@ The fix was to cache the wrappers once after `gpu_init()` and reuse them:
 
 - cache rigid-body state, force, and torque views
 - cache articulation `qpos`, `qvel`, `qf`, and target views
-- release those cached views in `close()`
+- cache `RenderCameraGroup` image views after its own `gpu_init()`
+- clone camera observations before returning them so callers never retain an
+  owner-tracked render buffer
+- release all cached views before closing their PhysX or render owner
 
-### 2. Tiny temporary tensors inside per-env reset loops
+### 2. Keep single-scene rendering on the direct GPU path
+
+A one-environment sensor or replay job must still use `RenderSystemGroup`.
+Falling back to `RenderSystem.step()` requires `sync_poses_gpu_to_cpu()` every
+frame and gives rigid bodies and articulation links different pose-transport
+paths. Direct sensor capture requires CUDA physics and Vulkan rendering on the
+same physical GPU with external-memory and external-semaphore support; startup
+compares device UUIDs/capabilities and fails with explicit diagnostics instead
+of silently falling back. (The interactive Viewer additionally supports staged
+cross-GPU transport.) The fixed lifecycle is the same for one or many scenes:
+
+1. construct `RenderSystemGroup` and bind `cuda_rigid_body_data` with
+   `set_cuda_poses()`
+2. create camera groups and set free cameras to their intended pose mode
+3. call the render group's `gpu_init()` once
+4. cache owner-tracked CUDA image views
+5. per replay frame, apply changed PhysX state, update articulation kinematics,
+   fetch articulation link poses into `cuda_rigid_body_data`, call
+   `update_render()`, then `take_picture()`
+
+Mounted wrist cameras reuse their PhysX link pose and require no free-camera
+pose mode. Fixed front/rear cameras use `"static"` mode.
+
+### 3. Use the current GPU Viewer transport architecture
+
+The interactive Viewer no longer downloads every PhysX pose to CPU. After
+PhysX `gpu_init()`, configure it once with
+`viewer.configure_physx_gpu_rendering(physx_system, transport="auto")`.
+SAPIEN compares the CUDA and Vulkan physical-device UUIDs and external
+memory/semaphore capabilities: a compatible same-GPU configuration selects
+`"direct"`; a different or incompatible render GPU selects compact pinned-host
+`"staged"` transport.
+
+Call `viewer.apply_interactions()` immediately before every PhysX substep so
+GPU dragging and queued teleports affect that step. Submit each displayed state
+with exactly one `viewer.update_render()` followed by `viewer.render()`. Normal
+Viewer operation must not call `sync_poses_gpu_to_cpu()`; that remains an
+explicit `"cpu-debug"` path only. The environment logs `viewer.pose_transport`
+and cumulative `viewer.pose_transfer_bytes` at startup so an unexpected staged
+fallback is visible.
+
+### 4. Tiny temporary tensors inside per-env reset loops
 
 In `_reset_franka()`, repeated patterns such as `torch.zeros_like(slice)` were
 executed for each environment during every reset. The individual tensors were
@@ -58,7 +102,7 @@ The fix was to switch to direct in-place zeroing on cached views:
 - write `= 0` into the target slices
 - avoid constructing temporary tensors just to clear data
 
-### 3. Per-part object churn in `_reset_parts()`
+### 5. Per-part object churn in `_reset_parts()`
 
 The original reset path rebuilt many short-lived objects for every part in every
 environment:
@@ -76,7 +120,7 @@ The fix was to batch the reset path:
 - perform one indexed write for all parts in the env
 - do the same for obstacle positions
 
-### 4. Controller hot-path allocation churn
+### 6. Controller hot-path allocation churn
 
 The reset issue was the user-visible symptom, but step-side warm-up also came
 from repeated allocation in the controller path:
@@ -107,12 +151,15 @@ When writing a SAPIEN environment, avoid these patterns in `step()` and
 
 Use this design instead:
 
-1. After `gpu_init()`, cache every frequently used SAPIEN CUDA buffer view.
-2. Reuse those cached views everywhere in step/reset code.
-3. Preallocate hot-path work buffers once in `__init__`.
-4. Batch state writes by environment whenever possible.
-5. Prefer in-place updates over constructing replacement tensors.
-6. Clear cached views in `close()` if the simulator is being torn down.
+1. After the relevant PhysX or render `gpu_init()`, cache every frequently used
+   SAPIEN CUDA buffer view.
+2. Reuse those cached views everywhere in step/reset/render code.
+3. Clone externally returned observations away from owner-tracked camera image
+   buffers before handing them to Torch/JAX consumers.
+4. Preallocate hot-path work buffers once in `__init__`.
+5. Batch state writes by environment whenever possible.
+6. Prefer in-place updates over constructing replacement tensors.
+7. Clear cached views before closing their owner in `close()`.
 
 In FurnitureBench, the relevant examples are:
 

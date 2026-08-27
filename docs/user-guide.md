@@ -81,6 +81,12 @@ Useful flags:
 Important notes:
 - `GPUMemoryConfig` scales from `num_envs`.
 - The maintained controller path is DiffIK.
+- The interactive Viewer uses SAPIEN's GPU pose transport. `transport="auto"`
+  selects direct CUDA/Vulkan interop on a compatible same physical GPU and
+  compact staged transfer otherwise; startup prints the selected transport and
+  staged-pose byte count. Every PhysX substep applies queued Viewer interactions
+  before stepping, and displayed states use `viewer.update_render()` followed by
+  `viewer.render()` without a full CPU pose sync.
 - Some older CLIs still accept `osc`; it now acts only as a compatibility alias to DiffIK.
 - Long-lived launchers that run several jobs in one Python process must call
   `env.close()` after each job and then `sapien.shutdown()`. Furniture part reset

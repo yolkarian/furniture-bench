@@ -72,10 +72,20 @@ RobotStateTensorDict: TypeAlias = dict[str, torch.Tensor]
 EnvObservation: TypeAlias = dict[str, torch.Tensor | RobotStateTensorDict]
 StepInfo: TypeAlias = dict[str, bool | torch.Tensor]
 
+
+def _same_physical_gpu(compute_device: sapien.Device, render_device: sapien.Device) -> bool:
+    """Return whether CUDA physics and Vulkan rendering identify one GPU."""
+
+    compute_uuid = compute_device.uuid
+    render_uuid = render_device.uuid
+    if compute_uuid is not None and render_uuid is not None:
+        return compute_uuid == render_uuid
+    return compute_device.cuda_id == render_device.cuda_id
+
+
 # TODO:
 #       Add randomness of obstacle, given that the full observations include the pose of obstacles
 #       Investigation the difference between Isaac Gym and Sapien in Operation
-#       Turn off RenderGroup when num_env == 1
 
 # TODO: Implement API for offline rendering (important!!)
 #       1. Set Robot according to observation
@@ -114,6 +124,8 @@ class FurnitureSimRLEnv(gym.Env):
         channel_first: bool = False,  # TODO: to implement, by default it is not channel_first
         high_random_idx: int = 0,
         resize_img: bool = True,
+        compute_device_id: int = 0,
+        graphics_device_id: int = 0,
         **kwargs: dict,  # dict which is used to catch extra params
     ) -> None:
         self.furniture_name = furniture
@@ -161,8 +173,38 @@ class FurnitureSimRLEnv(gym.Env):
             global ASSET_ROOT
             ASSET_ROOT = str(Path(__file__).parent.parent.absolute() / "assets")
         self.perturbation_prob = perturbation_prob
-        self.device = torch.device("cuda")
-        self.sapien_device = sapien.Device(self.device.type)
+        if compute_device_id < 0 or graphics_device_id < 0:
+            raise ValueError("compute_device_id and graphics_device_id must be non-negative.")
+        self.compute_device_id = int(compute_device_id)
+        self.graphics_device_id = int(graphics_device_id)
+        self.device = torch.device(f"cuda:{self.compute_device_id}")
+        torch.cuda.set_device(self.device)
+        self.sapien_device = sapien.Device(f"cuda:{self.compute_device_id}")
+        self.render_device = (
+            sapien.Device(f"cuda:{self.graphics_device_id}")
+            if self._rendering_enabled
+            else None
+        )
+        self._same_gpu_render_device = bool(
+            self.render_device is not None
+            and _same_physical_gpu(self.sapien_device, self.render_device)
+        )
+        self._direct_cuda_vulkan_interop = bool(
+            self._same_gpu_render_device
+            and self.render_device is not None
+            and self.sapien_device.can_direct_cuda_vulkan_interop()
+            and self.render_device.can_direct_cuda_vulkan_interop()
+        )
+        if self.render_device is not None:
+            print(
+                "GPU render devices: "
+                f"compute={self.sapien_device.name} (cuda:{self.sapien_device.cuda_id}, "
+                f"uuid={self.sapien_device.uuid}), "
+                f"graphics={self.render_device.name} (cuda:{self.render_device.cuda_id}, "
+                f"uuid={self.render_device.uuid}), "
+                f"same_physical_gpu={self._same_gpu_render_device}, "
+                f"direct_cuda_vulkan_interop={self._direct_cuda_vulkan_interop}"
+            )
         self.assemble_idx = 0
         self.high_random_idx: int = high_random_idx
         self.move_neutral = False
@@ -478,9 +520,8 @@ class FurnitureSimRLEnv(gym.Env):
 
         self.physx_system = sapien.physx.PhysxGpuSystem(self.sapien_device)
         self.urdf_loader = URDFLoader()  # just used to generate builder
-        self.render_system_group: Optional[
-            Union[sapien.render.RenderSystemGroup, sapien.render.RenderSystem]
-        ] = None
+        self.render_system_group: Optional[sapien.render.RenderSystemGroup] = None
+        self._sensor_cuda_tensor_views: Dict[str, Dict[str, torch.Tensor]] = {}
         # Simulation Step
         self.env_steps = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
 
@@ -696,7 +737,9 @@ class FurnitureSimRLEnv(gym.Env):
     def _scene_systems(self) -> list[Any]:
         systems = [self.physx_system]
         if self._rendering_enabled:
-            systems.append(sapien.render.RenderSystem(self.sapien_device))
+            if self.render_device is None:
+                raise RuntimeError("Rendering is enabled without a render device.")
+            systems.append(sapien.render.RenderSystem(self.render_device))
         return systems
 
     def _create_scenes(self) -> None:
@@ -1124,9 +1167,8 @@ class FurnitureSimRLEnv(gym.Env):
                 camera.set_far(cfg.far)
                 camera.set_near(cfg.near)
                 camera.set_name(name)
-                camera.set_gpu_pose_batch_index(
-                    self.end_effector_gpu_index[i].cpu().item()
-                )
+                # Fork.15 binds mounted cameras to the parent PhysX GPU link
+                # automatically during RenderSystemGroup.gpu_init().
                 self.franka_entities[i].links[self.ee_link_index].entity.add_component(
                     camera
                 )
@@ -1188,29 +1230,57 @@ class FurnitureSimRLEnv(gym.Env):
                     if len(self.sensors[camera_name]) <= i:
                         self.sensors[camera_name].append(create_camera(camera_name, i))
 
-    def _init_render(self) -> None:
-        for rb, gpu_pose_index in self._get_render_bodies():
-            if rb is not None:
-                for shape in rb.render_shapes:
-                    shape.set_gpu_pose_batch_index(gpu_pose_index)
-        if self.num_envs == 1:
-            self.render_system_group = self.scenes[0].render_system
-            self.render_system_group.step()
-            for sensors in self.sensors.values():
-                sensors[0].take_picture()
-            return
+    def _require_direct_sensor_interop(self) -> None:
+        """Require same-device CUDA/Vulkan interop for direct sensor capture."""
 
+        if self.render_device is None:
+            raise RuntimeError("Sensor rendering requires a render device.")
+        if not self._same_gpu_render_device:
+            raise RuntimeError(
+                "Direct GPU sensor rendering requires PhysX CUDA and Vulkan on the same "
+                "physical GPU; set compute_device_id == graphics_device_id. "
+                f"compute_uuid={self.sapien_device.uuid}, render_uuid={self.render_device.uuid}."
+            )
+        if not self._direct_cuda_vulkan_interop:
+            raise RuntimeError(
+                "The selected GPU lacks CUDA/Vulkan external-memory or semaphore interop: "
+                f"cuda_external_memory={self.sapien_device.cuda_external_memory}, "
+                f"cuda_external_semaphore={self.sapien_device.cuda_external_semaphore}, "
+                f"vulkan_external_memory={self.render_device.vulkan_external_memory}, "
+                f"vulkan_external_semaphore={self.render_device.vulkan_external_semaphore}."
+            )
+
+    def _init_render(self) -> None:
+        self._require_direct_sensor_interop()
+
+        # Use direct CUDA pose transport even for one scene. The CPU RenderSystem
+        # fallback required a full PhysX pose download and could replay rigid
+        # bodies while leaving articulation-link render poses stale.
         self.render_system_group = sapien.render.RenderSystemGroup(
             [scene.render_system for scene in self.scenes]
         )
         self.render_system_group.set_cuda_poses(self.physx_system.cuda_rigid_body_data)
 
         self.sensor_groups: Dict[str, sapien.render.RenderCameraGroup] = {}
-        # init sensors
-        for name, sensor in self.sensors.items():
-            self.sensor_groups[name] = self.render_system_group.create_camera_group(
-                sensor, picture_names=list(self.sensor_keys[name])
+        for name, cameras in self.sensors.items():
+            camera_group = self.render_system_group.create_camera_group(
+                cameras,
+                picture_names=list(self.sensor_keys[name]),
             )
+            # Wrist cameras are mounted on PhysX GPU links and auto-attached.
+            # Front/rear cameras are fixed free cameras with one sealed CPU pose.
+            if name != "wrist":
+                for camera in cameras:
+                    camera_group.set_pose_mode(camera, "static")
+            self.sensor_groups[name] = camera_group
+        self.render_system_group.gpu_init()
+        self._sensor_cuda_tensor_views = {
+            camera_name: {
+                picture_name: sensor_group.get_picture_cuda(picture_name).torch()
+                for picture_name in self.sensor_keys[camera_name]
+            }
+            for camera_name, sensor_group in self.sensor_groups.items()
+        }
         self.render_system_group.update_render()
 
     def get_sensor_obs(self) -> Dict[str, torch.Tensor]:
@@ -1221,25 +1291,16 @@ class FurnitureSimRLEnv(gym.Env):
         """
         sensor_obs = {}
 
-        if isinstance(self.render_system_group, sapien.render.RenderSystem):
-            sensor_raw_obs = {
-                camera_name: {
-                    picture_name: sensors[0]
-                    .get_picture_cuda(picture_name)
-                    .torch()
-                    .clone()[None, ...]
-                    for picture_name in self.sensor_keys[camera_name]
-                }
-                for camera_name, sensors in self.sensors.items()
+        # RenderCameraGroup image tensors are owner-tracked in SAPIEN fork.15.
+        # Clone cached wrappers so observations can outlive a frame without
+        # retaining the render group or blocking deterministic close().
+        sensor_raw_obs = {
+            camera_name: {
+                picture_name: picture.clone()
+                for picture_name, picture in pictures.items()
             }
-        else:
-            sensor_raw_obs = {
-                camera_name: {
-                    picture_name: sensor_group.get_picture_cuda(picture_name).torch()
-                    for picture_name in self.sensor_keys[camera_name]
-                }
-                for camera_name, sensor_group in self.sensor_groups.items()
-            }
+            for camera_name, pictures in self._sensor_cuda_tensor_views.items()
+        }
 
         for key in self.obs_keys:
             if key.startswith("color"):
@@ -1273,6 +1334,10 @@ class FurnitureSimRLEnv(gym.Env):
         set_shader(self.viewer_shader)
         self.viewer: Optional[Viewer] = Viewer()
         self.viewer.set_scene(self.scenes[0])
+        self.viewer.configure_physx_gpu_rendering(
+            self.physx_system,
+            transport="auto",
+        )
         control_window = self.viewer.control_window
         control_window.show_joint_axes = False
         control_window.show_camera_linesets = False
@@ -1282,37 +1347,23 @@ class FurnitureSimRLEnv(gym.Env):
         )
         self.viewer.set_camera_pose(pose)
 
-        # Initial rendering
-        self.physx_system.sync_poses_gpu_to_cpu()
+        # Initial direct/staged submission. Viewer auto selects direct external
+        # memory/semaphore interop only when PhysX CUDA and Vulkan identify the
+        # same capable physical GPU; otherwise it uses compact pinned staging.
+        self.viewer.update_render()
+        transport = self.viewer.pose_transport
+        if self._direct_cuda_vulkan_interop and transport != "direct":
+            raise RuntimeError(
+                "Viewer failed to select direct CUDA/Vulkan interop on a compatible "
+                f"same-GPU configuration; selected transport={transport!r}."
+            )
+        if not self._same_gpu_render_device and transport == "direct":
+            raise RuntimeError("Viewer selected direct transport across different physical GPUs.")
+        print(
+            f"Viewer GPU pose transport={transport}, "
+            f"initial_staged_pose_bytes={self.viewer.pose_transfer_bytes}"
+        )
         self.viewer.render()
-
-    def _get_render_bodies(self) -> List[Tuple[sapien.render.RenderBodyComponent, int]]:
-        """Get the render bodies and the indices for initing GPU rendering. Static Objects are not included
-
-        Returns:
-            List[Tuple[sapien.render.RenderBodyComponent, int]]: List of pair (RenderBodyComponent, index)
-        """
-        render_bodies = []
-        render_bodies += [
-            (
-                part_entity.find_component_by_type(sapien.render.RenderBodyComponent),
-                part_entity.find_component_by_type(
-                    sapien.physx.PhysxRigidDynamicComponent
-                ).gpu_pose_index,
-            )
-            for part_entities in self.part_entities.values()
-            for part_entity in part_entities
-        ]
-        franka_render_bodies = [
-            (
-                link.entity.find_component_by_type(sapien.render.RenderBodyComponent),
-                link.gpu_pose_index,
-            )
-            for franka_entity in self.franka_entities
-            for link in franka_entity.links
-        ]
-        render_bodies += franka_render_bodies
-        return render_bodies
 
     def get_reset_pose_part(self, part: Part) -> Tuple[np.ndarray, np.ndarray]:
         """Get reset pose of the furniture part
@@ -1855,7 +1906,7 @@ class FurnitureSimRLEnv(gym.Env):
         # the physics for the non-reset envs — doing so gives those envs an extra
         # uncounted step and causes correlated disturbances / sudden success spikes.
         if resetting_all:
-            self.physx_system.step()
+            self._step_physx()
             self._fetch_all()
         self.update_render()
         self.assemble_idx = 0
@@ -1870,7 +1921,7 @@ class FurnitureSimRLEnv(gym.Env):
         return obs, {}
 
     def refresh(self) -> None:
-        self.physx_system.step()
+        self._step_physx()
         self._fetch_all()
         self.update_render()
 
@@ -2126,11 +2177,18 @@ class FurnitureSimRLEnv(gym.Env):
         self.physx_system.gpu_apply_rigid_dynamic_force()
         self.physx_system.gpu_apply_rigid_dynamic_torque()
 
+    def _step_physx(self) -> None:
+        """Advance PhysX after applying any deferred GPU Viewer interactions."""
+
+        viewer = getattr(self, "viewer", None)
+        if viewer is not None:
+            viewer.apply_interactions()
+        self.physx_system.step()
+
     def step_viewer(self) -> None:
         if self.viewer is None:
             return
-        self.physx_system.sync_poses_gpu_to_cpu()
-        # self.scenes[0].update_render()  # This is not needed for viewer rendering
+        self.viewer.update_render()
         self.viewer.render()
 
     def _fetch_all(self) -> None:
@@ -2202,7 +2260,7 @@ class FurnitureSimRLEnv(gym.Env):
         # and parts to teleport back to their previous-step state every step.
         self._apply_action_only()
         for i in range(self.sim_steps):
-            self.physx_system.step()
+            self._step_physx()
             # Re-apply qf each substep because PhysX consumes joint forces
             # on each simulate() call. Without this, the gripper only receives
             # torque during the first substep.
@@ -2259,6 +2317,11 @@ class FurnitureSimRLEnv(gym.Env):
                 i, parts_poses[i]
             )  # TODO: check whether to index first or afterwards
         self._apply_all()
+        self.physx_system.gpu_update_articulation_kinematics()
+        # RenderSystemGroup reads link rows from cuda_rigid_body_data. Updating
+        # PhysX kinematics invalidates those public rows; fetch the new link poses
+        # before the CUDA render transform upload.
+        self.physx_system.gpu_fetch_articulation_link_pose()
         self.update_render()
         obs = self.get_observation()
         if self.record:
@@ -2409,12 +2472,8 @@ class FurnitureSimRLEnv(gym.Env):
         ] = 0
 
     def update_render(self) -> None:
-        # NOTE: Only with RenderSystemGroup, GPU Render can directly access physics info from GPU
-        #   Otherwise, even though render might use GPU, it needs loads physics info from CPU
-        if self.viewer is not None or (
-            self.num_envs == 1 and self.render_system_group is not None
-        ):
-            self.physx_system.sync_poses_gpu_to_cpu()
+        """Submit fetched PhysX GPU poses to the Viewer and sensor groups."""
+
         self.step_viewer()
         self.step_sensor()
 
@@ -2426,11 +2485,6 @@ class FurnitureSimRLEnv(gym.Env):
 
     def step_sensor(self) -> None:
         if self.render_system_group is None:
-            return
-        elif isinstance(self.render_system_group, sapien.render.RenderSystem):
-            self.render_system_group.step()
-            for sensors in self.sensors.values():
-                sensors[0].take_picture()
             return
         self.render_system_group.update_render()
         for name in self.sensors.keys():
@@ -2730,8 +2784,11 @@ class FurnitureSimRLEnv(gym.Env):
             recorder.stop_recording()
         self.recorder = None
 
-        # RenderCameraGroup owns camera/image CUDA exports; RenderSystemGroup owns
-        # the camera groups and sealed body/light state. Close both before scenes.
+        # RenderCameraGroup owns camera/image CUDA exports; release cached Torch
+        # consumers before closing camera groups and their sealed render state.
+        sensor_cuda_tensor_views = getattr(self, "_sensor_cuda_tensor_views", {})
+        sensor_cuda_tensor_views.clear()
+        self._sensor_cuda_tensor_views = {}
         for group in getattr(self, "sensor_groups", {}).values():
             group.close()
         self.sensor_groups = {}
@@ -2882,7 +2939,7 @@ class FurnitureSimEnv(FurnitureSimRLEnv):
         self.update_action(action)
         self._apply_action_only()
         for i in range(self.sim_steps):
-            self.physx_system.step()
+            self._step_physx()
             if i < self.sim_steps - 1:
                 self.physx_system.gpu_apply_articulation_qf()
         self._fetch_all()
