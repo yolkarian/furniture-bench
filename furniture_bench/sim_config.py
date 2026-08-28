@@ -70,7 +70,7 @@ class GPUMemoryConfig:
     found_lost_pairs_capacity: int = 2**18
     found_lost_aggregate_pairs_capacity: int = 2**4
     total_aggregate_pairs_capacity: int = 2**4
-    collision_stack_size: int = 2**17
+    collision_stack_size: int = 2**18
 
     def as_dict(self) -> dict[str, int]:
         """Return a plain dictionary accepted by `sapien.physx` helpers."""
@@ -154,9 +154,11 @@ class CameraCfg:
 sim_params = SimParams()
 # sim_params.up_axis = gymapi.UP_AXIS_Z
 sim_params.gravity = np.array([0.0, 0.0, -9.8])
-sim_params.dt = 1.0 / 160.0
+sim_params.dt = 1.0 / 60.0
 
-# Increasing this can make the simulation more stable.
+# Isaac Gym advances each 1/60 s simulation step with two 1/120 s solver
+# substeps. SAPIEN exposes one PhysX step, so the environment flattens these
+# substeps explicitly when configuring the GPU system.
 sim_params.substeps = 2
 sim_params.use_gpu_pipeline = True
 sim_params.physx.solver_type = 1
@@ -166,10 +168,10 @@ sim_params.physx.bounce_threshold_velocity = 0.02
 sim_params.physx.num_position_iterations = 20
 sim_params.physx.num_velocity_iterations = 1
 sim_params.physx.rest_offset = 0.0000
-sim_params.physx.contact_offset = 0.0002
+sim_params.physx.contact_offset = 0.002
 sim_params.physx.friction_offset_threshold = 0.01
-sim_params.physx.friction_correlation_distance = 0.005
-sim_params.physx.max_depenetration_velocity = 5
+sim_params.physx.friction_correlation_distance = 0.0005
+sim_params.physx.max_depenetration_velocity = 10
 sim_params.physx.use_gpu = True
 
 # Can set these if contacts are being weird
@@ -178,8 +180,8 @@ sim_params.physx.use_gpu = True
 
 
 sim_config["sim_params"] = sim_params
-sim_config["parts"] = {"friction": 0.25}
-sim_config["table"] = {"friction": 0.25}
+sim_config["parts"] = {"friction": 0.15}
+sim_config["table"] = {"friction": 0.10}
 sim_config["asset"] = {}
 
 # Parameters for the robot.
@@ -189,18 +191,25 @@ sim_config["robot"].update(
         # "kp": [270, 270, 270, 210, 180, 240],  # Cranked up gains
         "kv": None,  # Default velocity gains.
         "arm_frictions": 0.05,  # Default arm friction.
-        "gripper_frictions": 300.0,  # Default gripper friction. Originally 15.0
-        "gripper_torque": 5,  # Default torque for gripper. Originally 13.0
+        "gripper_frictions": 15.0,
+        "gripper_torque": 13,
     }
 )
 
 # Parameters for the light.
 sim_config["lights"] = [
     {
-        "color": [1.0, 1.0, 1.0],
-        "ambient": [0.15, 0.15, 0.15],
-        "direction": [0.1, 0.03, -0.2],
-    }
+        "color": [1.1, 1.1, 1.1],
+        "ambient": [0.25, 0.25, 0.25],
+        "direction": [1.0, -1.0, -2.0],
+        "shadow": True,
+    },
+    {
+        "color": [0.55, 0.55, 0.55],
+        "ambient": [0.25, 0.25, 0.25],
+        "direction": [-1.0, 0.5, -1.0],
+        "shadow": False,
+    },
 ]
 
 """

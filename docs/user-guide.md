@@ -79,7 +79,12 @@ Useful flags:
 - `--no-action`: keep stepping with neutral actions
 
 Important notes:
+- The SAPIEN backend is pinned to `3.0.0+fork.15.post2`.
 - `GPUMemoryConfig` scales from `num_envs`.
+- Furniture contact/control parameters mirror the legacy Isaac Gym Preview
+  benchmark: six explicit 1/120 s PhysX integrations per 50 ms action, arm PD
+  gains 1000/200, gripper friction/torque 15/13, contact offset 0.002 m,
+  friction correlation distance 0.0005 m, and part/table friction 0.15/0.10.
 - The maintained controller path is DiffIK.
 - The interactive Viewer uses SAPIEN's GPU pose transport. `transport="auto"`
   selects direct CUDA/Vulkan interop on a compatible same physical GPU and

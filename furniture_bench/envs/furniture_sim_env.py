@@ -304,8 +304,8 @@ class FurnitureSimRLEnv(gym.Env):
 
         # Predefined parameters
         self.pose_dim = 7
-        self.stiffness = 100.00
-        self.damping = 40.0
+        self.stiffness = 1000.0
+        self.damping = 200.0
         self.restitution = 0.000
         self.pos_scalar: float = 1.0
         self.rot_scalar: float = 1.0
@@ -535,8 +535,11 @@ class FurnitureSimRLEnv(gym.Env):
             self._clear_builder_visuals()
 
         # load Scene configs
-        self.physx_system.set_timestep(sim_params.dt)
-        self.dt = sim_params.dt
+        # Isaac Gym's `dt` contains `substeps` internal solver updates. Flatten
+        # them into explicit SAPIEN GPU steps to preserve its 1/120 s physics
+        # integration interval.
+        self.dt = sim_params.dt / sim_params.substeps
+        self.physx_system.set_timestep(self.dt)
 
         self._create_scenes()
         if self._rendering_enabled:
@@ -595,8 +598,15 @@ class FurnitureSimRLEnv(gym.Env):
             dtype=torch.float32,
             device=self.device,
         )
-        self.sim_steps = math.ceil(1.0 / config["robot"]["hz"] / self.sim_params.dt)
-        print(f"Control per {self.sim_steps} Step(s)")
+        # The original Isaac Gym loop issued three 1/60 s simulate calls, each
+        # with two internal substeps: six 1/120 s integrations, or 50 ms/action.
+        self.sim_steps = round(
+            1.0 / config["robot"]["hz"] / self.sim_params.dt
+        )
+        print(
+            f"Control per {self.sim_steps} Step(s), physics_dt={self.dt:.8f}, "
+            f"control_dt={self.sim_steps * self.dt:.8f}"
+        )
 
     def _create_static_obj_builders(self) -> None:
         # Create builders for all static objs (Actorbuilder/ArticulationBuilder)
@@ -819,13 +829,22 @@ class FurnitureSimRLEnv(gym.Env):
                 )
                 if render_body:
                     for render_shape in render_body.render_shapes:
-                        if isinstance(
-                            render_shape, sapien.render.RenderShapeTriangleMesh
-                        ):
-                            for part in render_shape.parts:
-                                set_rough_material(part.material)
-                        else:
-                            set_rough_material(render_shape.material)
+                        materials = (
+                            [part.material for part in render_shape.parts]
+                            if isinstance(
+                                render_shape, sapien.render.RenderShapeTriangleMesh
+                            )
+                            else [render_shape.material]
+                        )
+                        for material in materials:
+                            if key == "table":
+                                material.set_base_color([0.28, 0.30, 0.34, 1.0])
+                                material.set_roughness(0.32)
+                                material.set_specular(0.65)
+                                material.set_metallic(0.08)
+                                material.set_transmission(0.0)
+                            else:
+                                set_rough_material(material)
 
                 self.static_obj_entites[key].append(obj_entity)
                 if self.parallel_in_single_scene:
@@ -962,7 +981,7 @@ class FurnitureSimRLEnv(gym.Env):
                 direct_light = sapien.render.RenderDirectionalLightComponent()
 
                 direct_light.set_color(light["color"])
-                direct_light.shadow = True
+                direct_light.shadow = bool(light.get("shadow", True))
                 direct_light.shadow_near = -10.0
                 direct_light.shadow_far = 10.0
                 direct_light.shadow_half_size = 10.0
