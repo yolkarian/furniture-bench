@@ -86,6 +86,11 @@ Important notes:
   gains 1000/200, gripper friction/torque 15/13, contact offset 0.002 m,
   friction correlation distance 0.0005 m, and part/table friction 0.15/0.10.
 - The maintained controller path is DiffIK.
+- Pure state-only evaluation with `headless=True` and `enable_sensor=False`
+  builds PhysX-only scenes: URDF visuals are not parsed, and no RenderSystem,
+  lights, cameras, or render updates are created. The step path fetches only the
+  rigid-body, articulation-link, qpos, and qvel state consumed by control and
+  observations.
 - The interactive Viewer uses SAPIEN's GPU pose transport. `transport="auto"`
   selects direct CUDA/Vulkan interop on a compatible same physical GPU and
   compact staged transfer otherwise; startup prints the selected transport and

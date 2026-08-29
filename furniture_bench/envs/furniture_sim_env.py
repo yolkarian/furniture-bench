@@ -520,6 +520,7 @@ class FurnitureSimRLEnv(gym.Env):
 
         self.physx_system = sapien.physx.PhysxGpuSystem(self.sapien_device)
         self.urdf_loader = URDFLoader()  # just used to generate builder
+        self.urdf_loader.load_visuals = self._rendering_enabled
         self.render_system_group: Optional[sapien.render.RenderSystemGroup] = None
         self._sensor_cuda_tensor_views: Dict[str, Dict[str, torch.Tensor]] = {}
         # Simulation Step
@@ -531,8 +532,6 @@ class FurnitureSimRLEnv(gym.Env):
         self._create_ground_builder()
         self._create_franka_builder()
         self._create_part_builders()
-        if not self._rendering_enabled:
-            self._clear_builder_visuals()
 
         # load Scene configs
         # Isaac Gym's `dt` contains `substeps` internal solver updates. Flatten
@@ -734,15 +733,6 @@ class FurnitureSimRLEnv(gym.Env):
                     self.restitution,
                 )
         self.urdf_loader.load_nonconvex_collision_from_file = False
-
-    def _clear_builder_visuals(self) -> None:
-        self.ground_builder.visual_records.clear()
-        for builder in self.static_obj_builders.values():
-            builder.visual_records.clear()
-        for builder in self.part_builders.values():
-            builder.visual_records.clear()
-        for link_builder in self.frank_builder.link_builders:
-            link_builder.visual_records.clear()
 
     def _scene_systems(self) -> list[Any]:
         systems = [self.physx_system]
@@ -1860,6 +1850,12 @@ class FurnitureSimRLEnv(gym.Env):
         self._cuda_articulation_target_qpos[
             self.franka_gpu_index, : self.franka_num_dof
         ] = self._franka_default_dof_pos_torch
+        self._cuda_articulation_target_qvel[
+            self.franka_gpu_index, : self.franka_num_dof
+        ] = 0
+        self._cuda_articulation_qf[
+            self.franka_gpu_index, : self.franka_num_dof
+        ] = 0
         self._cuda_articulation_link_data[:, 7:] = 0
         self.root_link_gpu_index = torch.zeros((self.num_envs), dtype=torch.long)
         self.end_effector_gpu_index = torch.zeros((self.num_envs), dtype=torch.long)
@@ -1905,13 +1901,14 @@ class FurnitureSimRLEnv(gym.Env):
         super().reset(seed=seed)
         resetting_all = env_idxs is None
         if env_idxs is None:
-            env_idxs = torch.arange(
-                self.num_envs, device=self.device, dtype=torch.int32
-            )
-        resetting_all = resetting_all or (len(env_idxs) == self.num_envs)
-        for i in env_idxs:
-            env_idx = int(i.item()) if isinstance(i, torch.Tensor) else int(i)
-            self.reset_env(env_idx)
+            env_indices = range(self.num_envs)
+        else:
+            # Convert selected CUDA indices in one transfer instead of calling
+            # ``item()`` once per environment and synchronizing repeatedly.
+            env_indices = env_idxs.detach().cpu().tolist()
+            resetting_all = len(env_indices) == self.num_envs
+        for env_idx in env_indices:
+            self.reset_env(int(env_idx))
         # Only reset the controller on a full reset (all envs restarting).
         # A partial reset must not clobber the controller state for envs that
         # are still mid-episode.
@@ -2211,16 +2208,13 @@ class FurnitureSimRLEnv(gym.Env):
         self.viewer.render()
 
     def _fetch_all(self) -> None:
-        # fetch data from the Physx
+        """Fetch the PhysX state consumed by control and observations."""
+
         self.physx_system.gpu_fetch_rigid_dynamic_data()
         self.physx_system.gpu_fetch_articulation_link_pose()
         self.physx_system.gpu_fetch_articulation_link_velocity()
-        self.physx_system.gpu_fetch_articulation_link_incoming_joint_forces()
         self.physx_system.gpu_fetch_articulation_qpos()
         self.physx_system.gpu_fetch_articulation_qvel()
-        self.physx_system.gpu_fetch_articulation_qacc()
-        self.physx_system.gpu_fetch_articulation_target_qpos()
-        self.physx_system.gpu_fetch_articulation_target_qvel()
 
     def _apply_all(self) -> None:
         """Apply ALL GPU buffers. Use ONLY during reset / state restoration.
@@ -2493,6 +2487,8 @@ class FurnitureSimRLEnv(gym.Env):
     def update_render(self) -> None:
         """Submit fetched PhysX GPU poses to the Viewer and sensor groups."""
 
+        if not self._rendering_enabled:
+            return
         self.step_viewer()
         self.step_sensor()
 

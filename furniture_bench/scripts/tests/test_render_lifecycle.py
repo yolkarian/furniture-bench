@@ -199,6 +199,7 @@ class TestRenderLifecycle(unittest.TestCase):
     def test_gpu_viewer_submission_does_not_sync_cpu_poses(self) -> None:
         calls: list[str] = []
         env = object.__new__(FurnitureSimRLEnv)
+        env._rendering_enabled = True
         env.viewer = SimpleNamespace(
             update_render=lambda: calls.append("viewer_update"),
             render=lambda: calls.append("viewer_render"),
@@ -210,6 +211,37 @@ class TestRenderLifecycle(unittest.TestCase):
         self.assertEqual(
             calls,
             ["viewer_update", "viewer_render", "sensor_update"],
+        )
+
+    def test_physics_only_update_skips_render_paths(self) -> None:
+        calls: list[str] = []
+        env = object.__new__(FurnitureSimRLEnv)
+        env._rendering_enabled = False
+        env.step_viewer = lambda: calls.append("viewer_update")
+        env.step_sensor = lambda: calls.append("sensor_update")
+
+        env.update_render()
+
+        self.assertEqual(calls, [])
+
+    def test_fetches_only_control_and_observation_state(self) -> None:
+        calls: list[str] = []
+        env = object.__new__(FurnitureSimRLEnv)
+        env.physx_system = SimpleNamespace(
+            gpu_fetch_rigid_dynamic_data=lambda: calls.append("rigid_dynamic"),
+            gpu_fetch_articulation_link_pose=lambda: calls.append("link_pose"),
+            gpu_fetch_articulation_link_velocity=lambda: calls.append(
+                "link_velocity"
+            ),
+            gpu_fetch_articulation_qpos=lambda: calls.append("qpos"),
+            gpu_fetch_articulation_qvel=lambda: calls.append("qvel"),
+        )
+
+        env._fetch_all()
+
+        self.assertEqual(
+            calls,
+            ["rigid_dynamic", "link_pose", "link_velocity", "qpos", "qvel"],
         )
 
     def test_viewer_auto_selects_same_gpu_direct_transport(self) -> None:
