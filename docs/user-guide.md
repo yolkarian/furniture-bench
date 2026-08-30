@@ -79,8 +79,14 @@ Useful flags:
 - `--no-action`: keep stepping with neutral actions
 
 Important notes:
+- The SAPIEN backend is pinned to `3.0.0+fork.15.post2`.
 - `GPUMemoryConfig` scales from `num_envs`.
 - The maintained controller path is DiffIK.
+- Pure state-only evaluation with `headless=True` and `enable_sensor=False`
+  builds PhysX-only scenes: URDF visuals are not parsed, and no RenderSystem,
+  lights, cameras, or render updates are created. The step path fetches only the
+  rigid-body, articulation-link, qpos, and qvel state consumed by control and
+  observations.
 - The interactive Viewer uses SAPIEN's GPU pose transport. `transport="auto"`
   selects direct CUDA/Vulkan interop on a compatible same physical GPU and
   compact staged transfer otherwise; startup prints the selected transport and

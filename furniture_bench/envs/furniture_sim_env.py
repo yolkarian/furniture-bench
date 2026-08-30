@@ -520,6 +520,7 @@ class FurnitureSimRLEnv(gym.Env):
 
         self.physx_system = sapien.physx.PhysxGpuSystem(self.sapien_device)
         self.urdf_loader = URDFLoader()  # just used to generate builder
+        self.urdf_loader.load_visuals = self._rendering_enabled
         self.render_system_group: Optional[sapien.render.RenderSystemGroup] = None
         self._sensor_cuda_tensor_views: Dict[str, Dict[str, torch.Tensor]] = {}
         # Simulation Step
@@ -531,8 +532,6 @@ class FurnitureSimRLEnv(gym.Env):
         self._create_ground_builder()
         self._create_franka_builder()
         self._create_part_builders()
-        if not self._rendering_enabled:
-            self._clear_builder_visuals()
 
         # load Scene configs
         self.physx_system.set_timestep(sim_params.dt)
@@ -725,15 +724,6 @@ class FurnitureSimRLEnv(gym.Env):
                 )
         self.urdf_loader.load_nonconvex_collision_from_file = False
 
-    def _clear_builder_visuals(self) -> None:
-        self.ground_builder.visual_records.clear()
-        for builder in self.static_obj_builders.values():
-            builder.visual_records.clear()
-        for builder in self.part_builders.values():
-            builder.visual_records.clear()
-        for link_builder in self.frank_builder.link_builders:
-            link_builder.visual_records.clear()
-
     def _scene_systems(self) -> list[Any]:
         systems = [self.physx_system]
         if self._rendering_enabled:
@@ -819,13 +809,22 @@ class FurnitureSimRLEnv(gym.Env):
                 )
                 if render_body:
                     for render_shape in render_body.render_shapes:
-                        if isinstance(
-                            render_shape, sapien.render.RenderShapeTriangleMesh
-                        ):
-                            for part in render_shape.parts:
-                                set_rough_material(part.material)
-                        else:
-                            set_rough_material(render_shape.material)
+                        materials = (
+                            [part.material for part in render_shape.parts]
+                            if isinstance(
+                                render_shape, sapien.render.RenderShapeTriangleMesh
+                            )
+                            else [render_shape.material]
+                        )
+                        for material in materials:
+                            if key == "table":
+                                material.set_base_color([0.28, 0.30, 0.34, 1.0])
+                                material.set_roughness(0.32)
+                                material.set_specular(0.65)
+                                material.set_metallic(0.08)
+                                material.set_transmission(0.0)
+                            else:
+                                set_rough_material(material)
 
                 self.static_obj_entites[key].append(obj_entity)
                 if self.parallel_in_single_scene:
@@ -962,7 +961,7 @@ class FurnitureSimRLEnv(gym.Env):
                 direct_light = sapien.render.RenderDirectionalLightComponent()
 
                 direct_light.set_color(light["color"])
-                direct_light.shadow = True
+                direct_light.shadow = bool(light.get("shadow", True))
                 direct_light.shadow_near = -10.0
                 direct_light.shadow_far = 10.0
                 direct_light.shadow_half_size = 10.0
@@ -1886,13 +1885,14 @@ class FurnitureSimRLEnv(gym.Env):
         super().reset(seed=seed)
         resetting_all = env_idxs is None
         if env_idxs is None:
-            env_idxs = torch.arange(
-                self.num_envs, device=self.device, dtype=torch.int32
-            )
-        resetting_all = resetting_all or (len(env_idxs) == self.num_envs)
-        for i in env_idxs:
-            env_idx = int(i.item()) if isinstance(i, torch.Tensor) else int(i)
-            self.reset_env(env_idx)
+            env_indices = range(self.num_envs)
+        else:
+            # Convert selected CUDA indices in one transfer instead of calling
+            # ``item()`` once per environment and synchronizing repeatedly.
+            env_indices = env_idxs.detach().cpu().tolist()
+            resetting_all = len(env_indices) == self.num_envs
+        for env_idx in env_indices:
+            self.reset_env(int(env_idx))
         # Only reset the controller on a full reset (all envs restarting).
         # A partial reset must not clobber the controller state for envs that
         # are still mid-episode.
@@ -2192,16 +2192,13 @@ class FurnitureSimRLEnv(gym.Env):
         self.viewer.render()
 
     def _fetch_all(self) -> None:
-        # fetch data from the Physx
+        """Fetch the PhysX state consumed by control and observations."""
+
         self.physx_system.gpu_fetch_rigid_dynamic_data()
         self.physx_system.gpu_fetch_articulation_link_pose()
         self.physx_system.gpu_fetch_articulation_link_velocity()
-        self.physx_system.gpu_fetch_articulation_link_incoming_joint_forces()
         self.physx_system.gpu_fetch_articulation_qpos()
         self.physx_system.gpu_fetch_articulation_qvel()
-        self.physx_system.gpu_fetch_articulation_qacc()
-        self.physx_system.gpu_fetch_articulation_target_qpos()
-        self.physx_system.gpu_fetch_articulation_target_qvel()
 
     def _apply_all(self) -> None:
         """Apply ALL GPU buffers. Use ONLY during reset / state restoration.
@@ -2474,6 +2471,8 @@ class FurnitureSimRLEnv(gym.Env):
     def update_render(self) -> None:
         """Submit fetched PhysX GPU poses to the Viewer and sensor groups."""
 
+        if not self._rendering_enabled:
+            return
         self.step_viewer()
         self.step_sensor()
 

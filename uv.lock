@@ -227,7 +227,7 @@ requires-dist = [
     { name = "pytorch-kinematics", specifier = ">=0.7.5" },
     { name = "rich" },
     { name = "safetensors" },
-    { name = "sapien", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.15.post1/sapien-3.0.0+fork.15.post1-cp311-cp311-manylinux_2_28_x86_64.whl" },
+    { name = "sapien", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.15.post2/sapien-3.0.0+fork.15.post2-cp311-cp311-manylinux_2_28_x86_64.whl" },
     { name = "scikit-image" },
     { name = "scipy", specifier = "==1.15.2" },
     { name = "spnav" },
@@ -765,8 +765,8 @@ wheels = [
 
 [[package]]
 name = "sapien"
-version = "3.0.0+fork.15.post1"
-source = { url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.15.post1/sapien-3.0.0+fork.15.post1-cp311-cp311-manylinux_2_28_x86_64.whl" }
+version = "3.0.0+fork.15.post2"
+source = { url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.15.post2/sapien-3.0.0+fork.15.post2-cp311-cp311-manylinux_2_28_x86_64.whl" }
 dependencies = [
     { name = "lxml", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "networkx", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -777,7 +777,7 @@ dependencies = [
     { name = "transforms3d", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.15.post1/sapien-3.0.0+fork.15.post1-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:cebc0f43453c8e99d6ea6bf271f91149e74604a5480969d2aef9922ee8c5e7c8" },
+    { url = "https://github.com/yolkarian/SAPIEN/releases/download/3.0.0%2Bfork.15.post2/sapien-3.0.0+fork.15.post2-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:b01a06fba2720afd8a8284da890ad8660bca04e246d011c6c7189a0db26420a4" },
 ]
 
 [package.metadata]

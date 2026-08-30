@@ -197,10 +197,17 @@ sim_config["robot"].update(
 # Parameters for the light.
 sim_config["lights"] = [
     {
-        "color": [1.0, 1.0, 1.0],
-        "ambient": [0.15, 0.15, 0.15],
-        "direction": [0.1, 0.03, -0.2],
-    }
+        "color": [1.1, 1.1, 1.1],
+        "ambient": [0.25, 0.25, 0.25],
+        "direction": [1.0, -1.0, -2.0],
+        "shadow": True,
+    },
+    {
+        "color": [0.55, 0.55, 0.55],
+        "ambient": [0.25, 0.25, 0.25],
+        "direction": [-1.0, 0.5, -1.0],
+        "shadow": False,
+    },
 ]
 
 """
